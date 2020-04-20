@@ -1,0 +1,156 @@
+-- Lock testing harness
+
+SET NOCOUNT ON
+
+create table #lcks (
+	lckid	int identity(1,1),
+	spid	int,
+	dbid	int,
+	objid	int,
+	indid	int,
+	type	varchar(4),
+	Resource		varchar(32),
+	mode	varchar(8),
+	status	varchar(5),
+	dt		datetime2 default(SYSDATETIME())
+)
+
+-- drop table #lcks
+
+insert into #lcks (spid,dbid,ObjId,IndId,Type,Resource,Mode,Status)
+exec sp_lock @@SPID	-- spid
+
+SELECT DB=db_name(dbid),[TABLE]=OBJECT_NAME(objid), [INDEX]=I.NAME,[TYPE]=I.TYPE_DESC,LCKS.*
+FROM #lcks LCKS
+left JOIN SYS.INDEXES I ON I.OBJECT_ID = LCKS.objid AND I.INDEX_ID = LCKS.indid
+where dbid = db_id()
+
+--When you set a specific transaction isolation level, you are directly influencing read queries (SELECT statements) while they are holding their S locks. 
+--You can’t influence writers in any way – an X lock is always taken when you change a record in a table (INSERT, UPDATE, DELETE).
+
+--SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+--SET TRANSACTION ISOLATION LEVEL READ COMMITTED	-- default
+-- By default, SQL Server releases S locks as soon as it has finished reading the data.
+-- When you run a Scan operator against a table (single-threaded), only 1 S lock is held at a given time.
+-- Using transaction isolation level REPEATABLE READ or SERIALIZABLE, SQL Server holds S locks until the transaction is finished
+SET NOCOUNT OFF
+
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE
+begin transaction
+
+--ROWLOCK & PAGLOCK & TABLOCK control granularity; applying a finer/coarser-grained row/page/table level locking.  They are not an instruction to lock
+--UPDLOCK & XLOCK on the other hand are an instruction to lock
+
+-- Your select statement here...
+RAISERROR('DELETE + INSERT', 0, 1) WITH NOWAIT
+--update tblOffice set
+Select chOfficeCode, dtUpdateDateTime,
+	dtUpdateDateTime = dateadd(second,1,dtUpdateDateTime)
+from dbo.tblOffice WITH (TABLOCK)
+
+SET NOCOUNT ON
+
+insert into #lcks (spid,dbid,ObjId,IndId,Type,Resource,Mode,Status)
+exec sp_lock @@SPID	-- spid
+
+SELECT DB=db_name(dbid),[TABLE]=object_schema_name(I.object_id)+'.'+OBJECT_NAME(objid), [INDEX]=I.NAME,[TYPE]=I.TYPE_DESC,LCKS.*
+FROM #lcks LCKS
+left JOIN SYS.INDEXES I ON I.OBJECT_ID = LCKS.objid AND I.INDEX_ID = LCKS.indid
+where dbid = db_id()
+
+rollback transaction
+
+drop table #lcks
+
+-- https://www.microsoftpressstore.com/articles/article.aspx?p=2233327&seqNum=3
+
+/* http://www.sql-server-performance.com/2004/advanced-sql-locking/
+When you do an update with a where clause, SQL Server has to read the table and/or any indexes to determine which rows to change. 
+Before it reads anything from the table/index, SQL Server first locks the object it’s accessing. 
+Since SQL Server knows you’ve issued an update, it will choose an update lock, and not a shared lock. 
+This is to prevent a conversion deadlock - (SPID X has a shared lock on resource A, and so has SPID Y. 
+This is no problem, since two shared locks are compatible with each other. 
+Now X wants to convert the shared lock to an exclusive lock to update the resource. 
+X has to wait for Y to release the shared lock to do this, and while X waits, Y decides to do the same and convert its lock to an exclusive lock. 
+X is waiting for Y, and Y is waiting for X. Deadlock.)
+Update locks allow a connection to read a resource, and at the same time, advertise its intention to lock it at some later point in time in order to edit the resource.
+SQL Server doesn’t know in advance if a transaction will want to convert a shared lock to an exclusive lock, 
+unless it’s a single SQL statement, like an UPDATE statement, that first has to read the table before it can update it. 
+To use update locks in a SELECT-statement, you must explicitly specify that you want SQL Server to use them, and you do this with the lock hint UPDLOCK.
+
+When SQL Server has found the row(s) to change, it will convert the update lock to an exclusive lock on the row — on a RID if it’s a heap, or on the KEY on a clustered index table. 
+This means that normally you won’t see the update locks ‘when executing an UPDATE-statement’–- they are converted almost immediately to exclusive locks.
+However, if SQL Server uses one index to find the rows, it will lock the index pages and the index keys with update locks. 
+If the update doesn’t change any of the columns contained in the index, the update locks won’t be converted to exclusive locks.
+
+
+Lock Resources
+When SQL Server tries to determine whether a requested lock can be granted, 
+it checks the sys.dm_tran_locks view to determine whether a matching lock with a conflicting lock mode already exists.
+It compares locks by looking at the database ID (resource_database_ID), 
+	the values in the resource_description and resource_associated_entity_id columns, and the type of resource locked.
+SQL Server knows nothing about the meaning of the resource description. 
+It simply compares the strings identifying the lock resources to look for a match. 
+If it finds a match with a request_status value of GRANT, it knows the resource is already locked; 
+it then uses the lock compatibility matrix to determine whether the current lock is compatible with the one being requested.
+
+Where locks are put in Database:
+Level: Resource.
+---------------
+RID: db_id:file_id:page_no:slot number. RID Used to lock a single row within a table.
+KEY: db_id:hobt_id (index key hash value). Row lock within an index. It means primary key, Candidate Key, Secondary key etc.
+PAG: db_id:file_id:page_no. 8-kilobyte (KB) data page or index page. Lock can be place on Page Level also, it means if particular page is locks so another user cannot update data on it.
+EXT: db_id:file_id:extent_no. Contiguous group of eight data pages which can includes index pages also.
+OBJECT: db_id:object_id or resource_associated_entity_id. Complete table, including all data and indexes.
+DB: db_id or resource_database_ID. Entire Database can be locked for some type of users which have read permission on database.
+
+
+The Lock mode:
+Sch-S = Schema stability. Ensures that a schema element, such as a table or index, is not dropped while any session holds a schema stability lock on the schema element.
+Sch-M = Schema modification. Must be held by any session that wants to change the schema of the specified resource. Ensures that no other sessions are referencing the indicated object.
+S = Shared. The holding session is granted shared access to the resource.
+U = Update. Indicates an update lock acquired on resources that may eventually be updated. 
+	It is used to prevent a common form of deadlock that occurs when multiple sessions lock resources for potential update at a later time.
+X = Exclusive. The holding session is granted exclusive access to the resource.
+IS = Intent Shared. Indicates the intention to place S locks on some subordinate resource in the lock hierarchy.
+IU = Intent Update. Indicates the intention to place U locks on some subordinate resource in the lock hierarchy.
+IX = Intent Exclusive. Indicates the intention to place X locks on some subordinate resource in the lock hierarchy.
+SIU = Shared Intent Update. Indicates shared access to a resource with the intent of acquiring update locks on subordinate resources in the lock hierarchy.
+SIX = Shared Intent Exclusive. Indicates shared access to a resource with the intent of acquiring exclusive locks on subordinate resources in the lock hierarchy.
+UIX = Update Intent Exclusive. Indicates an update lock hold on a resource with the intent of acquiring exclusive locks on subordinate resources in the lock hierarchy.
+BU = Bulk Update. Used by bulk operations.
+
+RangeS-S = Shared lock on the range between keys; shared lock on the key at the end of the range
+RangeS-U = Shared lock on the range between keys; update lock on the key at the end of the range
+RangeIn-Null = Exclusive lock to prevent inserts on the range between keys; no lock on the keys themselves
+RangeX-X = Exclusive lock on the range between keys; exclusive lock on the key at the end of the range
+RangeIn-S = Conversion lock created by S and RangeIn_Null lock
+RangeIn-U = Conversion lock created by U and RangeIn_Null lock
+RangeIn-X = Conversion of X and RangeIn_Null lock
+RangeX-S = Conversion of RangeIn_Null and RangeS_S lock
+RangeX-U = Conversion of RangeIn_Null and RangeS_U lock
+
+Lock compatiblity
+Shared locks are compatible with other shared locks, but they are not compatible with exclusive locks. 
+Update locks are compatible with shared locks, but they are not compatible with exclusive locks or with other update locks. 
+Exclusive locks are not compatible with shared locks, update locks, or other exclusive locks. 
+Different types of locks are held for different amounts of time to obtain the requested isolation level.
+
+Lock duration
+The length of time that SQL Server holds a lock depends primarily on the mode of the lock and the transaction isolation level that is in effect. 
+READ COMMITTED is SQL Server's default isolation level. At this level, SQL Server releases S locks as soon as it has read and processed the locked data. 
+It holds an X lock until the end of the transaction, whether the transaction is committed or rolled back. It holds a U lock until the end of the transaction,
+unless it promoted the U lock to an X lock, in which case the X lock, as with all X locks, remains for the duration of the transaction.
+If the transaction isolation level is REPEATABLE READ or SERIALIZABLE, S locks have the same duration as X locks.	
+That is, SQL Server does not release them until the transaction is over.
+In addition to changing the transaction isolation level, we can control the lock duration by using lock hints.
+
+Intent locks
+The Database Engine often has to acquire locks at multiple levels of granularity to fully protect a resource. 
+This group of locks at multiple levels of granularity is called a lock hierarchy. 
+For example, to fully protect a read of an index, an instance of the Database Engine may have to acquire share locks on rows and intent share locks on the pages and table.
+Intent locks do not represent a distinct mode of locking. The term "intent" is a qualifier to the modes - shared locks, exclusive locks, and update locks. 
+You can have intent shared (IS) locks, intent exclusive locks (IX), and even intent update locks (IU), 
+indicated in the request_mode column of the sys.dm_tran_locks view by IS, IX and IU, respectively.
+
+*/

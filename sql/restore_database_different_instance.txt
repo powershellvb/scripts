@@ -1,0 +1,56 @@
+USE master
+
+DECLARE @databasename varchar(256),
+		@restore_file_cmd nvarchar(2000),
+		@backup_folder nvarchar(2000),
+		@restoredbname varchar(256),
+		@restore_string nvarchar(4000),
+		@data_folder nvarchar(1000),
+		@log_folder nvarchar(1000)
+
+--#################### UPDATE THE FOLLOWING ONLY #######################
+SET @backup_folder = 'd:\MSSQL\MSSQL13.RS2016\MSSQL\Backup\JB_adhoc_request\SI_Stage_20190426_1352.bak' -- backup file location
+SET @restoredbname = 'SI_Stage' -- the new name of the database
+SET @data_folder = 'D:\MSSQL\MSSQL13.RS2016\MSSQL\DATA\' -- the folder location of the mdf and/or ndf files
+SET @log_folder = 'L:\MSSQL\MSSQL13.RS2016\MSSQL\Log\' -- the folder location of the ldf file
+--######################################################################
+
+--Drop temp table if exits
+IF OBJECT_ID('tempdb..#BackupFiles') IS NOT NULL
+    DROP TABLE #BackupFiles
+
+Create table #BackupFiles (LogicalName nvarchar(128), PhysicalName nvarchar(260), Type char(1), FilegroupName nvarchar(128), size numeric(20,0), MaxSize numeric(20,0)
+						, field bigint, createlsn numeric(25,0), droplsn numeric(25,0), uniqueid uniqueidentifier, readonlylsn numeric(25,0), readwritelsn numeric(25,0), backupsizeinbytes bigint, sourceblocksize int, filegroupid int
+						, loggroupguid uniqueidentifier, differentialbaselsn numeric(25,0) , differentialbaseguid uniqueidentifier, isreadonly bit, ispresent bit, tdethumbprint varbinary(32), SnapshotUrl nvarchar(360));
+
+--Insert data from RESTORE FILELISTONLY 
+insert into #BackupFiles (LogicalName, PhysicalName, Type, FilegroupName, size, MaxSize
+						, field, createlsn, droplsn, uniqueid, readonlylsn, readwritelsn, backupsizeinbytes, sourceblocksize, filegroupid
+						, loggroupguid, differentialbaselsn, differentialbaseguid, isreadonly, ispresent, tdethumbprint, SnapshotUrl)
+
+	EXEC('RESTORE FILELISTONLY FROM DISK = '''+@backup_folder+'''')
+
+--Check the temp table if data is inserted
+--Select * From #BackupFiles
+
+-- creating restore database script
+SET @restore_string = N'RESTORE DATABASE [' + @restoredbname + ']
+	FROM DISK = ''' + @backup_folder + '''
+	WITH STATS = 10, REPLACE, '
+
+SELECT @restore_string  = @restore_string + N'MOVE ''' + LogicalName + ''' TO ''' + 
+	CASE [Type]
+	WHEN N'D' Then N''+ @data_folder + RIGHT(physicalname, CHARINDEX('\', REVERSE(physicalname))-1) + N''', ' --@restoredbname + N'_data.mdf'', '
+	WHEN N'L' Then N''+ @log_folder + RIGHT(physicalname, CHARINDEX('\', REVERSE(physicalname))-1) + N''', ' --@restoredbname + N'_log.ldf'', '
+	ELSE N''+ @data_folder + RIGHT(physicalname, CHARINDEX('\', REVERSE(physicalname))-1) + N''', ' --@restoredbname + N'_data.ndf'', '''
+	END
+from #BackupFiles
+
+set @restore_string = substring(@restore_string, 1, len(@restore_string)-1);  -- remove last ','
+
+PRINT (@restore_string)
+EXEC sp_executesql @restore_string
+
+--Drop temp table if exits
+IF OBJECT_ID('tempdb..#BackupFiles') IS NOT NULL
+    DROP TABLE #BackupFiles

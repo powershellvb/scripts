@@ -1,0 +1,107 @@
+USE [tempdb]
+GO
+
+-- Examine current file size and location
+--exec sp_spaceused @updateusage=true;
+
+select StartupSizeMB=SUM(mf.size)/128
+, CurrentSizeMB = SUM(df.size)/128
+, SpaceUsedMB = SUM(FILEPROPERTY(df.name, 'SpaceUsed'))/128
+, AvailableSpaceMB = SUM(df.size - FILEPROPERTY(df.name, 'SpaceUsed'))/128
+, [%SpaceUsed] = CAST(AVG(((FILEPROPERTY(df.name, 'SpaceUsed')*100.)/df.size)) AS decimal(5,2))
+, growthType=max(case mf.is_percent_growth when 1 then 'percentage' else 'size in 8K pages' end)
+, NextGrowthMB=avg(case mf.is_percent_growth when 1 then (mf.growth*df.size/128/100) else mf.growth/128 end)
+, mf.type_desc,mf.name,df.physical_name --,mf.database_id
+from sys.database_files df	-- current DB
+inner join sys.master_files mf on mf.database_id = db_id() and mf.file_id = df.file_id 
+--where mf.type_desc = 'ROWS'
+GROUP BY GROUPING SETS (
+	(mf.type_desc,mf.name,df.physical_name)
+	,(mf.type_desc)
+	,()
+)
+
+
+USE [tempdb]
+GO
+-- TempDB space allocations
+SELECT FreePages	= SUM(unallocated_extent_page_count),
+	FreeSpaceMB	= cast(SUM(unallocated_extent_page_count)/128. as decimal(12,2)),
+	VersionStorePages = SUM(version_store_reserved_page_count),
+	VersionStoreMB	= cast(SUM(version_store_reserved_page_count)/128. as decimal(12,2)),
+	InternalObjPages= SUM(internal_object_reserved_page_count),
+	InternalObjMB	= cast(SUM(internal_object_reserved_page_count)/128. as decimal(12,2)),
+	UserObjPages	= SUM(user_object_reserved_page_count),
+	UserObjMB	= cast(SUM(user_object_reserved_page_count)/128. as decimal(12,2))
+FROM sys.dm_db_file_space_usage;
+
+
+-- TempDB space allocations by session
+--User Objects - user object page counters:
+--User-defined tables and indexes
+--System tables and indexes
+--Global temporary tables and indexes
+--Local temporary tables and indexes
+--Table variables
+--Tables returned in the table-valued functions
+
+--Internal Objects - internal object page counters:
+--Work tables for cursor or spool operations and temporary large object (LOB) storage. 
+--Work files for operations such as a hash join
+--Sort runs
+
+USE [tempdb]
+GO
+SELECT
+	es.session_id,
+	DB_NAME(ssu.database_id) AS [DBName],
+	es.HOST_NAME,
+	es.program_name,
+	es.login_name,
+	es.login_time,es.last_request_start_time,es.last_request_end_time,
+	es.status,er.command,er.blocking_session_id,
+	es.open_transaction_count AS OpenTx,
+	es.transaction_isolation_level AS TIL,
+	es.cpu_time AS [CPUtimeMS],
+	es.total_scheduled_time AS [TotalSchTimeMS],
+	es.total_elapsed_time AS [ElapsedTimeMS],
+	es.memory_usage * 8	AS [MemoryUsageKB)],
+	ssu.user_objects_alloc_page_count * 8 AS [UserObjKB],
+	ssu.user_objects_dealloc_page_count * 8 AS [UserObjDeallocKB],
+	ssu.internal_objects_alloc_page_count * 8 AS [InternalObjKB],
+	ssu.internal_objects_dealloc_page_count * 8 AS [InternalObjDeallocKB],
+	(ssu.user_objects_alloc_page_count + ssu.internal_objects_alloc_page_count) * 8 AS [AllObjKB],
+	(ssu.user_objects_dealloc_page_count + ssu.internal_objects_dealloc_page_count) * 8 AS [AllObjDeallocKB],
+	((ssu.user_objects_alloc_page_count + ssu.internal_objects_alloc_page_count) - (ssu.user_objects_dealloc_page_count + ssu.internal_objects_dealloc_page_count)) * 8 AS PendingDeallocKB,
+	ssu.user_objects_deferred_dealloc_page_count * 8 AS UserDeferredDeallocKB,
+	es.is_user_process,
+	es.row_count,
+    st.text [Query Text]
+FROM sys.dm_db_session_space_usage ssu
+inner join sys.dm_exec_sessions es ON es.session_id = ssu.session_id and es.is_user_process = 1
+left join sys.dm_exec_requests er ON er.session_id = es.session_id
+OUTER APPLY sys.dm_exec_sql_text(er.sql_handle) st
+order by ssu.user_objects_alloc_page_count + ssu.internal_objects_alloc_page_count desc
+
+
+exec monitor..sp_whoisactive @show_sleeping_spids=2, @get_outer_command=1, @get_additional_info=1,  @find_block_leaders=1
+
+/*
+
+USE master;
+EXECUTE AS LOGIN = 'DETNSW\srvSQLServer';  -- to avail of instant file initialisation
+
+ALTER DATABASE tempdb MODIFY FILE (NAME = templog,  SIZE = 2048MB, FILEGROWTH = 512MB);
+
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev,  SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev2, SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev3, SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev4, SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev5, SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev6, SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev7, SIZE = 8192MB, FILEGROWTH = 512MB);
+ALTER DATABASE tempdb MODIFY FILE (NAME = tempdev8, SIZE = 8192MB, FILEGROWTH = 512MB);
+
+REVERT;
+
+*/

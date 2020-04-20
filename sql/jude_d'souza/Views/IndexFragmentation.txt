@@ -1,0 +1,16 @@
+-- index fragmentation By Object - LIMITED
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT top 10 [Index]=object_schema_name(i.object_id)+'.'+object_name(i.object_id), IndexName=i.name,i.object_id,i.index_id,i.fill_factor,p.partition_number,p.rows,ips.page_count,SizeMB=ips.page_count/128,ips.avg_fragmentation_in_percent, ips.index_type_desc,ips.alloc_unit_type_desc
+,ius.user_seeks,ius.user_scans,ius.user_lookups
+,rebuildCmd = 'ALTER INDEX ['+i.name+'] ON ['+object_schema_name(i.object_id)+'].['+object_name(i.object_id)+'] REBUILD WITH (FILLFACTOR = '+cast(i.fill_factor as varchar(3))+', ONLINE = ON);'
+FROM sys.dm_db_index_physical_stats (DB_ID(), NULL, NULL, NULL, 'LIMITED') AS ips -- database_id , object_id|NULL, index_id|NULL, partition_number|NULL, mode|NULL - LIMITED,SAMPLED,DETAILED. The default (NULL) is LIMITED
+inner join sys.partitions p on p.object_id = ips.object_id AND p.index_id = ips.index_id and p.partition_number = ips.partition_number 
+JOIN sys.indexes AS i ON i.object_id = p.object_id AND i.index_id = p.index_id and i.type > 0
+join sys.dm_db_index_usage_stats ius ON ius.DATABASE_ID = DB_ID() AND i.OBJECT_ID = ius.OBJECT_ID AND i.index_id = ius.index_id
+where ips.avg_fragmentation_in_percent > 15
+	and ius.user_scans > 100
+	and p.rows > 1000
+order by ips.avg_fragmentation_in_percent desc
+
+--fillfactor is used when creating, rebuilding, or reorganizing an index and applies to in-row data pages.
+--It is not used when allocating a fresh new page at the end of the index or modifying rows on an existing page.

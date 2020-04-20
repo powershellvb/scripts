@@ -1,0 +1,275 @@
+﻿-- Options -> Additional Connection Parameters	-> ConnectRetryCount=0 (default value:1)
+--												-> ConnectRetryInterval=0 (default value:10 seconds)
+-- netstat -ano | find "135"
+https://access.vdi.det.nsw.edu.au/Citrix/PRD-DOEWeb/
+
+qwinsta /?
+rwinsta /?
+
+--Note 15/05/2019
+tw0000sqltm005.uatdetnsw.win\TST_SYN_RA151  manually restarted for patching.  Service Needs to be stopped and disabled
+
+select name from sys.databases where name = 'SSISDB'
+Server Name	name
+dw0000sqldm011.devdetnsw.win\sdsbi_dev1	SSISDB
+dw0991sqp001n1.devdetnsw.win\SDSBI_DEV1	SSISDB
+dw0991sqp003n1.devdetnsw.win\AOS_AG_TEST	SSISDB
+
+
+/* Servers and groups */
+-- Pwxxxxsap... servers not managed by SQL team
+:connect dw0000sqlde002.devdetnsw.win\control_point1
+:connect tw0000sqlte004.uatdetnsw.win\control_point1
+:connect QW0000SQLQE015.predetnsw.win\control_point1
+:connect pw0000sqlpe126.detnsw.win\control_point1
+:connect upvewsql001.central.det.win\SQLDBA
+
+:connect pw0991sqmgmth7.priv.det.nsw.edu.au\control_point1  -- no CMS; use PW0991SQS701N1.priv.det.nsw.edu.au\PRIVADFS1 for health checks
+
+:connect pw0991sqmgmth5.uc.det.nsw.edu.au\control_point1
+:connect qw0991sqmgmth5.preuc.det.nsw.edu.au\control_point1 -- no SQL installed
+:connect tw0000sqmgmth5.tstuc.det.nsw.edu.au\control_point1
+:connect dw0000sqmgmth5.devuc.det.nsw.edu.au\control_point1 
+
+:connect pw0000sqlpe126.detnsw.win\control_point1
+use msdb
+go
+;with srv (ServerGroup, server_name, VM, Instance, App, owner,owner_email_address,xmdesc)
+as (
+	select cm.ServerGroup,server_name=lower(cm.server_name)
+	, VM=case isInstance when 0 then cm.server_name else substring(cm.server_name,1,isInstance-1) end 
+	, Instance=case isInstance when 0 then '' else substring(cm.server_name,isInstance+1,100) end 
+	, App=Instance.inst.value('(//application_name)[1]', 'varchar(128)')
+	, [owner]=Instance.inst.value('(//owner)[1]', 'varchar(128)')
+	, owner_email_address=Instance.inst.value('(//owner)[1]', 'varchar(128)')
+	, cm.xmdesc
+	--,cm.server_group_id,cm.parent_id,cm.server_id
+	from (
+		SELECT grp.server_group_id,grp.parent_id,ServerGroup=grp.name,svr.server_name,svr.server_id, xmdesc=cast (svr.description as xml), isInstance=charindex('\',svr.server_name,1) 
+		FROM msdb.dbo.sysmanagement_shared_server_groups_internal grp
+		INNER JOIN msdb.dbo.sysmanagement_shared_registered_servers_internal svr ON grp.server_group_id = svr.server_group_id
+	) cm
+	outer APPLY cm.xmdesc.nodes('//instance') Instance ( inst )
+)
+select srv.*
+from srv
+where ServerGroup != 'Decommissioned' and -- 2016
+	--srv.server_name like 'qw099[12]sqp%n1%' and
+	srv.Instance like '%365%' --and
+	--srv.App like 'ConfigMgr2012 eT4L' -- '
+	--srv.owner like  'Celso Lima Junior%'
+order by 1,2;
+GO
+
+-- single instance VMs
+select cm.ServerGroup,Instance=max(case isInstance when 0 then '' else substring(cm.server_name,isInstance+1, len(cm.server_name)) end),VM=case isInstance when 0 then cm.server_name else substring(cm.server_name,1,isInstance-1) end
+from (
+	SELECT grp.server_group_id,grp.parent_id,ServerGroup=grp.name,svr.server_name,svr.server_id, xmdesc=cast (svr.description as xml), isInstance=charindex('\',svr.server_name,1) 
+	FROM msdb.dbo.sysmanagement_shared_server_groups_internal grp
+	INNER JOIN msdb.dbo.sysmanagement_shared_registered_servers_internal svr ON grp.server_group_id = svr.server_group_id
+) cm
+where ServerGroup like '201%'
+group by cm.ServerGroup,case isInstance when 0 then cm.server_name else substring(cm.server_name,1,isInstance-1) end 
+having count (*) = 1
+and  max(case isInstance when 0 then '' else substring(cm.server_name,isInstance+1, len(cm.server_name)) end) != 'sqlplaceholder_1'
+order by 1,2
+GO
+
+
+-- Get full path in CMS
+WITH CMS1 AS (
+     select name,description,parent_id,server_group_id, level=0, lvlname=cast('+ '+[name] as varchar(1000))
+     from msdb.dbo.sysmanagement_shared_server_groups_internal g
+     where parent_id is null
+     UNION ALL
+     select g1.name,g1.description,g1.parent_id,g1.server_group_id,level+1,lvlname=CAST((lvlname+' / '+g1.name) as varchar(1000)) from msdb.dbo.sysmanagement_shared_server_groups_internal g1
+     inner join cms1 on cms1.server_group_id=g1.parent_id
+)
+ 
+select  server_name,lvlname,level_depth=level from cms1
+INNER JOIN msdb.dbo.sysmanagement_shared_registered_servers_internal s on s.server_group_id=CMS1.server_group_id
+where server_name like 'dw0992sqp003n2%'
+
+
+-- Supported instances
+;WITH ServerGroups(parent_id, server_group_id, grp, hasChild) AS (
+	SELECT parent_id, server_group_id, grp=cast(name as varchar(1024))
+		,hasChild=IIF(exists (select 1 FROM msdb.dbo.sysmanagement_shared_server_groups cg WHERE cg.parent_id = tg.server_group_id), 1, 0)
+	FROM msdb.dbo.sysmanagement_shared_server_groups tg
+	WHERE is_system_object = 0 AND tg.name = 'can connect'
+		AND EXISTS (SELECT * FROM msdb.dbo.sysmanagement_shared_server_groups ssg WHERE tg.parent_id = ssg.server_group_id AND ssg.name = 'supported')              
+
+	UNION ALL
+
+	SELECT sg.parent_id, sg.server_group_id, grp=cast(pg.grp+'/'+sg.name as varchar(1024))
+		,hasChild=IIF(exists (select 1 FROM msdb.dbo.sysmanagement_shared_server_groups cg WHERE cg.parent_id = sg.server_group_id), 1, 0)
+	FROM msdb.dbo.sysmanagement_shared_server_groups sg
+	INNER JOIN ServerGroups pg ON pg.server_group_id = sg.parent_id
+)
+, ManagedInstances as (
+SELECT sg.parent_id, sg.server_group_id, sg.grp, srv.server_name, sg.hasChild --,isInstance=charindex('\',srv.server_name,1) 
+FROM ServerGroups sg
+LEFT JOIN msdb.dbo.sysmanagement_shared_registered_servers_internal srv ON srv.server_group_id = sg.server_group_id
+)
+select grp, server_name --,isInstance
+from ManagedInstances ms
+where hasChild = 0 and server_name is not null 
+order by 1,2
+
+
+
+-- create a sorted list of distinct registered servers
+--if cast(SERVERPROPERTY('ProductMajorVersion') as int ) > 11
+select '('''+@@servername+''', '''+cast(SERVERPROPERTY('MachineName')as varchar(256))+'.'+DEFAULT_DOMAIN()+'.WIN'', '+cast(SERVERPROPERTY('ProductMajorVersion') as varchar(4))+'),'
+
+--execute against any server
+select VM=lower(VM), MinVer=min(ver), MaxVer=max(ver) 
+from (values
+<paste list from previous query output>
+) srv (instance, VM, ver) --where ver > 11
+group by vm
+order by 1
+
+--minimum viable product:  1/April -- pending auto backup enrollment
+-- vms, instances, databases
+select VM=substring(@@servername,1, patindex('%\%',@@servername)-1),[instance]=@@servername,name 
+from sys.databases where database_id > 5
+
+--match AG name to server
+-- Run from supported/can connect
+
+select serverproperty('ProductMajorVersion'), serverproperty('ProductVersion') 
+where cast (serverproperty('ProductMajorVersion')  int) > 13
+and @@servername like 'dw099[12]sqp003n[23]%'
+
+if exists (select * from sys.all_views where name = 'availability_groups')
+begin
+	exec ('select name from master.sys.availability_groups  where name like ''pw0991sqs001n1''
+	')
+end;
+
+-- Who created the instance and when
+select * from master.sys.extended_properties
+
+select CreatedBy=crby.value,CreatedDate=crwh.value 
+from master.sys.extended_properties crby 
+cross join master.sys.extended_properties crwh
+where crby.name = 'instance_created_by' and crwh.name = 'instance_created_datetime'
+
+
+create table #members (
+	account_name	sysname,
+	type			char(8),
+	privilege		char(9),
+	mapped_login	sysname,
+	permission_path	sysname
+)
+INSERT INTO #members
+EXEC xp_logininfo 'DETNSW\AD_Databases_Admin', 'members'
+select * from #members
+
+if cast(SERVERPROPERTY('ProductMajorVersion') as int)  > 11 
+begin 
+	declare  @tbl table (db nvarchar(256), ver nvarchar(256), target_recovery_time_in_seconds int)
+	insert into @tbl
+	exec ('SELECT db.Name, @@version,db.target_recovery_time_in_seconds from sys.databases db where database_id = 2 and db.target_recovery_time_in_seconds > 0')
+	select * from @tbl
+end
+
+
+-- Powershell in controlpoint
+dbahelp # list all commands
+
+Get-DnsCNames | where {$_.CName -match 'cesdbi2'}
+Get-DnsCNames | where {$_.hostname -match 'qw0000sqs104a1.detnsw.win'}	#listener or host
+
+--add / update a cname for each instance
+Add-DnsCName -Name "pv_p2s1" -HostName "pw0000sqs005a2.detnsw.win" -Verbose [-Force]
+Add-DnsCName -Name "fxawms1" -HostName "pw0000sqs005a1.detnsw.win" -Verbose [-Force]
+Remove-DnsCName -Name jbtest1 -Verbose -Force 
+
+nslookup pv_p2s1.SQL.INFRA.NSWEDUSERVICES.COM.AU
+nslookup DQMPreReports.SQL.INFRA.NSWEDUSERVICES.COM.AU 
+
+
+Create CMS Local Server Group
+C:\DET DBA Scripts\library\powershell\jude_d'souza\SSMS_group_registration.ps1
+
+foreach ($vm in Get-CMSHosts) {
+Invoke-Command -ComputerName $vm.host_name -ScriptBlock {Get-Content env:computername; POWERCFG -GETACTIVESCHEME}
+}
+
+/*
+$CentralManagementServer = "PW0000SQLPE126\CONTROL_POINT1"
+
+# get all registered SQL Server names from CMS
+$Result =  Invoke-Sqlcmd -ServerInstance $CentralManagementServer -Database msdb -Query "SELECT DISTINCT server_name FROM msdb.dbo.sysmanagement_shared_registered_servers ORDER BY server_name" -ErrorAction Stop
+
+foreach($item in $Result)
+   {$Inst=$item.server_name
+   Invoke-Sqlcmd -ServerInstance  ${Inst} -Database master -Query "SELECT @@SERVERNAME AS srv_name, COUNT([name]) AS num_of_dbs FROM sys.sysdatabases" -ErrorAction SilentlyContinue 
+  }
+ 
+ 
+$SQLServers = Invoke-DbaSqlcmd -ServerInstance "CentralServerName" -Query "SELECT InstanceConnection FROM CentralDB.dbo.Instances" | Select-Object -ExpandProperty InstanceConnection
+Install-DbaWhoIsActive -SqlInstance $SQLServers -Database monitor
+
+
+
+ 
+*/
+
+
+(Get-CMSInstances) | Where-Object {$_.name -match "CM12_.00_1"} | select name,instance| Sort-Object name
+
+New-SSMSGroupRegistration "ConfigMgr_H01"
+pw0000sqlue004.detnsw.win\cm12_a00_1
+pw0000sqlue005.detnsw.win\CM12_B00_1
+pw0000sqlue006.detnsw.win\cm12_c00_1
+pw0000sqlue007.detnsw.win\cm12_d00_1
+pw0000sqlue008.detnsw.win\cm12_e00_1
+
+New-SSMSGroupRegistration "ConfigMgr_H02"
+pw0000sqlue009.detnsw.win\cm12_j00_1
+pw0000sqlue010.detnsw.win\cm12_K00_1
+pw0000sqlue011.detnsw.win\cm12_L00_1
+pw0000sqlue012.detnsw.win\cm12_M00_1
+pw0000sqlue013.detnsw.win\cm12_N00_1
+pw0000sqlue014.detnsw.win\cm12_P00_1
+pw0000sqlue015.detnsw.win\cm12_Q00_1
+
+-- DEV
+New-SSMSGroupRegistration "SQLRES"
+dw0991sqp003n1.devdetnsw.win\AOS_AG_TEST
+dw0991sqp003n3.devdetnsw.win\AOS_AG_TEST
+dw0992sqp003n2.devdetnsw.win\AOS_AG_TEST
+
+
+------------------------
+
+select distinct group_name,case when charindex('.',server_name) > 0 then substring(server_name,1, charindex('.',server_name)-1) else server_name end 
+from monitor.dbo.sysmanagement_shared_registered_servers_consolidated 
+where case when charindex('.',server_name) > 0 then substring(server_name,1, charindex('.',server_name)-1) else server_name end in
+('dw0000sqldm002'
+,'gw0000sqlgm002'
+,'pw0000sqlpm002'
+,'pw0000sqlpm013'
+,'pw0000sqlsm003'
+,'pw0000sqlve002'
+,'pw0992sqlpe001'
+,'pw0992sqp002n1'
+,'qw0000sqlqm011'
+,'qw0000sqlqm012'
+,'qw0000sqlqm013'
+,'utvbausql006'
+,'dw0000sqldm003'
+,'dw0000sqlsm002'
+,'dw0000sqlve002'
+,'udvbisql004'
+,'tw0000sqltm007')
+
+
+
+
+
+

@@ -1,0 +1,133 @@
+-- Output Volume, Memory, CPU details of an instance
+create table #cluster (
+	clustername nvarchar(128),
+	aagname sysname
+)
+create table #si (
+	PhysMemMB bigint,
+	CommittedMB bigint,
+	TargetMB bigint,
+	cpu_count int,
+	hyperthread_ratio int,
+	sqlserver_start_time datetime
+)
+declare @cmd varchar(1024)
+if cast (serverproperty('ProductMajorVersion') as int) >= 11
+begin
+	insert into #cluster
+	select clusterName=isnull(hc.cluster_name,''), AAGname=isnull(ag.name,'')
+	from sys.dm_hadr_cluster hc outer apply sys.availability_groups ag;
+
+	select @cmd = 'select PhysMemMB=physical_memory_kb/1024,CommittedMB=committed_kb/1024,TargetMB=committed_target_kb/1024, cpu_count,hyperthread_ratio,sqlserver_start_time from sys.dm_os_sys_info'
+end
+else
+	select @cmd = 'select PhysMemMB=physical_memory_in_bytes/1048576,CommittedMB=bpool_committed/1048576,TargetMB=bpool_commit_target/1048576,cpu_count,hyperthread_ratio,sqlserver_start_time from sys.dm_os_sys_info'
+
+insert into #si exec (@cmd)
+
+declare @Domain varchar(128)
+EXEC master.dbo.xp_regread 'HKEY_LOCAL_MACHINE', 'SYSTEM\CurrentControlSet\services\Tcpip\Parameters', N'Domain',@Domain OUTPUT
+
+;with vol as (
+	select drive=left(vs.volume_mount_point,1), volume=case left(vs.volume_mount_point,1) when 't' then 'temp' when 'l' then 'log' else 'data' end,
+	 sizeMB=mf.size/128 ,totalMB=vs.total_bytes/1048576, availableMB=vs.available_bytes/1048576
+	from sys.master_files mf
+	cross apply sys.dm_os_volume_stats(mf.database_id, mf.file_id) vs
+)
+,dl as (
+	select drives=stuff((select distinct ', '+drive from vol  for XML PATH ('')),1,2,'') 
+)
+,dbs as (
+	SELECT *
+	FROM (select volume,sizeMB from vol) v
+	PIVOT (sum(sizeMB) FOR volume IN (data, log, temp)) AS pvt 
+)
+,vt as (
+	select *
+	from (select volume,totalMB from vol) v
+	PIVOT (min(totalMB) FOR volume IN (data, log, temp)) AS pvt
+)
+,va as (
+	select *
+	from (select volume,availableMB from vol) v
+	PIVOT (min(availableMB) FOR volume IN (data, log, temp)) AS pvt 
+)
+,numa as (
+	--select nodes=count(node_id),schdeulers=sum(online_scheduler_count),cores=sum(cpu_count) from sys.dm_os_nodes where node_state_desc = 'ONLINE'
+	select nodes=count(distinct parent_node_id),schdeulers=count(scheduler_id) from sys.dm_os_schedulers where is_online = 1 and scheduler_id < 255 and parent_node_id < 64
+)
+select FQDN=lower(cast(SERVERPROPERTY('MachineName') as nvarchar) + '.' + @Domain)
+	,clusterName=isnull(cl.clustername,''), AAGname=isnull(cl.aagname,'')
+	,dl.drives,TotalDataMB=vt.data,AvailDataMB=va.data,DBDataSizeMB=dbs.data,[%ofVol]=dbs.data*100/vt.data
+	,TotalLogMB=vt.log,AvailLogMB=va.log,DBLogSizeMB=dbs.log,[%ofVol]=dbs.log*100/vt.log
+	,TotalTmpMB=vt.temp,AvailTmpMB=va.temp,TempDBSizeMB=dbs.temp,[%ofVol]=dbs.temp*100/vt.temp
+	,si.PhysMemMB,maxservermem=mem.value_in_use
+	,[%ofPhys]=cast(mem.value_in_use as bigint)*100/PhysMemMB,si.TargetMB,si.CommittedMB
+	,PLEminutes=ple.cntr_value / 60
+	,numa.nodes,CPUs=si.cpu_count, HTR=si.hyperthread_ratio--,cores=si.cpu_count/si.hyperthread_ratio
+	,maxdop=dop.value_in_use,CTP=ctp.value_in_use
+	,Ver=serverproperty('ProductMajorVersion'), build=serverproperty('ProductBuild')
+from #si si
+cross apply dl
+cross apply dbs 
+cross apply vt 
+cross apply va
+cross apply numa
+cross apply sys.dm_os_performance_counters ple
+outer apply sys.configurations dop 
+outer apply sys.configurations ctp 
+outer apply sys.configurations mem 
+outer apply #cluster cl
+where dop.name like 'max degree of parallelism'
+and ctp.name like 'cost threshold for parallelism'
+and mem.name like 'max server memory (MB)'
+and ple.cntr_type = 65792 and ple.object_name like '%:Buffer Manager%' and ple.counter_name = 'Page life expectancy'
+
+drop table #si
+drop table #cluster
+go
+
+
+/*
+
+declare @cpu_count int,@dop int,@maxdop int
+select @dop = cast(value_in_use as int) , @cpu_count = cpu_count
+from sys.configurations dop 
+cross apply sys.dm_os_sys_info si
+where dop.name like 'max degree of parallelism'
+if (@dop = 0)
+begin
+	if (@cpu_count >= 8)
+		set @maxdop = 4
+	else 
+		set @maxdop = @cpu_count / 2
+	RAISERROR('%s: Revising DOP to %d', 0, 1, @@servername, @maxdop) WITH NOWAIT
+	exec sp_configure 'show advanced options', 1
+	reconfigure;
+
+	exec sp_configure 'max degree of parallelism', @maxdop
+	reconfigure;
+end
+
+declare @ctp int
+select @ctp = cast(value_in_use as int) from sys.configurations ctp where ctp.name like 'cost threshold for parallelism'
+if (@ctp = 5)
+begin	 
+	RAISERROR('%s: Revising DOP to 30', 0, 1, @@servername) WITH NOWAIT
+
+	exec sp_configure 'show advanced options', 1
+	reconfigure;
+
+	exec sp_configure 'cost threshold for parallelism', 30
+	reconfigure;
+end
+
+*/
+
+/* FQDN
+DECLARE @Domain NVARCHAR(100)
+EXEC master.dbo.xp_regread 'HKEY_LOCAL_MACHINE', 'SYSTEM\CurrentControlSet\services\Tcpip\Parameters', N'Domain',@Domain OUTPUT
+SELECT Cast(SERVERPROPERTY('MachineName') as nvarchar) + '.' + @Domain AS FQDN
+
+select cast(SERVERPROPERTY('MachineName') as varchar(256))+'.'+DEFAULT_DOMAIN()+'.WIN'
+*/

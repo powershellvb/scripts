@@ -1,0 +1,157 @@
+-- Step 1. Check space for backup
+declare	@default_backup_folder nvarchar(4000)
+EXEC  master.dbo.xp_instance_regread N'hkey_local_machine', N'software\microsoft\mssqlserver\mssqlserver', N'backupdirectory', @default_backup_folder output, 'no_output'
+
+declare @diskSpace table (drive char(1), MBfree INT)
+insert into @diskSpace
+exec xp_fixeddrives
+
+;WITH backups AS (
+SELECT  d.name AS database_name, d.state_desc, recovery_model_desc, backup_finish_date,backupName=s.name 
+,DATEDIFF(hour, backup_finish_date, GETDATE()) AS hours_since, DATEDIFF(DAY, backup_finish_date, GETDATE()) AS days_since, m.physical_device_name, CASE [type] WHEN 'D' THEN 'DATABASE' WHEN 'I' THEN 'DIFFERENTIAL' WHEN 'L' THEN 'LOG' WHEN 'G' THEN 'FILE OR FILEGROUP' WHEN 'P' THEN 'PARTIAL' WHEN 'Q' THEN 'DIFFERIENTIAL PARTIAL' ELSE '???' END AS [type_desc], backup_start_date
+, ROW_NUMBER() OVER(PARTITION BY database_name ORDER BY backup_finish_date DESC) AS Row, CAST(s.backup_size / POWER(1024,2) AS DECIMAL(9,2)) AS [backupSize(mb)], s.backup_set_id
+, CAST(s.compressed_backup_size / POWER(1024,2) AS DECIMAL(9,2)) AS [backupSizeCompressed(mb)] --2008+
+FROM sys.databases d LEFT JOIN msdb.dbo.backupset s ON d.name = s.database_name	LEFT JOIN msdb.dbo.backupmediafamily m ON s.media_set_id = m.media_set_id
+WHERE d.name <> 'tempdb' and type = 'D'
+)
+SELECT [Server]=@@servername --,database_name, state_desc AS dbCurrentState, recovery_model_desc, backupName, backup_finish_date, hours_since, days_since, physical_device_name, type_desc, backup_start_date, [backupSize(mb)]
+,TotalBackupSizeMB=sum([backupSize(mb)]), MBfree=min(MBfree), drive=max(drive), [DBs#]=count(*)
+FROM backups
+cross apply @diskSpace 
+WHERE (row = 1 OR backup_set_id IS NULL)
+and drive = left(@default_backup_folder,1)
+
+------------------------------------------
+
+--Step 2a. get backup history details
+-- Copy the DBList column and use in the next script 2b - evict database from AAGs and execute
+-- After databases have been evicted, execute the script in the RestoreCmd column.
+/*
+- remember if there is a differential backup you do not have to restore any transaction log backups between the full and differential
+- copy the scripts up until the point in time you need to recover 
+*/;
+;with latestfull as (
+	select --top 1
+			s.backup_start_date,
+			s.database_name,
+			row_number() over (partition by s.database_name order by s.backup_start_date desc) as row_id
+	from msdb.dbo.backupset s
+	inner join msdb.dbo.backupmediafamily m on m.media_set_id = s.media_set_id
+	where	s.database_name like '8496' and --= db_name() and
+			s.[type] <> 'l' and --s.is_copy_only = 1 
+			s.backup_start_date > '2019-06-15'
+			-- changed below to just '%%' if you only want to generate the restores for the latest backup
+			--and s.[name] like '%Full copy only backup for INC000008164469' ESCAPE '!'
+)
+select s.name,
+	DBList=''''+s.database_name+''',',
+	s.backup_finish_date,
+	[BackupAge(hrs)]=datediff(hour, s.backup_finish_date, getdate()),
+	m.physical_device_name,
+	case [type]
+			when 'd' then 'database'
+			when 'i' then 'differential'
+			when 'l' then 'log'
+			when 'f' then 'file or filegroup'
+			when 'g' then 'differential file'
+			when 'p' then 'partial'
+			when 'q' then 'differential partial'
+			else '???'
+	end as [type_desc],
+	RestoreCmd=case [type] 
+			when 'd' then 'use master; restore database [' + s.database_name + '] from disk =''' + m.physical_device_name + ''' with stats = 5, replace, nounload;'
+			when 'i' then 'restore database [' + s.database_name + '] from disk =''' + m.physical_device_name + ''' with stats = 5, norecovery;' 
+			when 'l' then 'restore log [' + s.database_name + '] from disk =''' + m.physical_device_name + ''' with norecovery;' 
+	end, 
+	cast(software_major_version as varchar) + '.' + cast(software_minor_version as varchar) + '.' + cast(software_build_version as varchar) as build,
+	[user_name],
+	last_lsn,
+	checkpoint_lsn,
+	first_lsn,
+	database_creation_date,
+	s.backup_start_date,
+	s.backup_finish_date,
+	[backupTime(s)] = datediff(second,s.backup_start_date,s.backup_finish_date),
+	BUsizeMB=s.backup_size / 1048576, CompressedMB=compressed_backup_size / 1048576,
+	server_name,
+	machine_name,
+	is_password_protected,
+	is_damaged,
+	is_copy_only
+from msdb.dbo.backupset s
+inner join msdb.dbo.backupmediafamily m on m.media_set_id = s.media_set_id
+inner join latestfull lf on s.backup_start_date = lf.backup_start_date and s.database_name = lf.database_name
+where lf.row_id = 1
+order by s.backup_start_date asc
+
+-- Step 2b. evict database from AAGs
+
+SELECT distinct ServerName=@@servername, ID=db.database_id,[DBName]=db.Name,ag.name
+,UsrCmd='ALTER DATABASE  ['+db.Name+'] SET RESTRICTED_USER WITH ROLLBACK IMMEDIATE'
+,EvictCmd='ALTER AVAILABILITY GROUP ['+ag.name+'] REMOVE DATABASE ['+db.Name+'];'
+from sys.databases db
+left join sys.availability_replicas ar on ar.replica_id = db.replica_id 
+left join sys.availability_groups ag on ag.group_id = ar.group_id
+where db.Name in (  -- replace database list - remove trailing comma
+'TimeTable_Q_8180',
+'TimeTable_Q_8570'
+)
+order by DBName
+
+
+-- Step 3. Restore database with Options & Move
+
+with lastDBBackup AS
+(
+	select backup_name=bs.name, bmf.physical_device_name
+	,bs.server_name,bs.database_name,bs.backup_start_date,bs.backup_finish_date
+	,bs.type, bs.is_copy_only, bs.is_snapshot, bs.user_name
+	,db.is_broker_enabled,db.is_cdc_enabled,is_replicated=(db.is_published|db.is_merge_published)
+	,backupMB=backup_size/1048576, compressedMB=compressed_backup_size/1048576
+	,database_backup_lsn,bs.first_lsn, bs.last_lsn
+	,is_readonly=case bs.is_readonly when 1 then 'Yes' else 'No' end,bs.recovery_model
+	,dataLogicalname=mf.name, dataPhysicalname=mf.Physical_Name
+	,logLogicalname=lf.name, logPhysicalname=lf.Physical_Name
+	,row = ROW_NUMBER() OVER(PARTITION BY bs.database_name, bs.type ORDER BY bs.backup_set_id desc)
+	from sys.databases db	
+	inner join sys.master_files mf on mf.database_id = db.database_id and mf.type = 1
+	inner join sys.master_files lf on lf.database_id = db.database_id and lf.type = 0
+	inner join msdb.dbo.backupset bs  on db.name = bs.database_name 
+	join msdb.dbo.backupmediafamily bmf on bs.media_set_id = bmf.media_set_id
+	where bs.server_name = @@servername
+	and bs.database_name in ( -- replace database list - remove trailing comma
+		'TimeTable_TA_3945',
+		'TimeTable_TA_5711',
+		'TimeTable_TA_7445',
+		'TimeTable_TA_8123',
+		'TimeTable_TA_8232',
+		'TimeTable_TA_8457',
+		'TimeTable_TA_8592',
+		'TimeTable_TA_8804'
+		)
+		and bs.is_copy_only = 1 and bs.type = 'D' and bs.backup_start_date < getdate()
+)
+select server_name,physical_device_name,database_name,backupType=case type when 'D' then 'Database' when 'I' then 'Differential' when 'L' then 'Log' when 'F'then 'Filegroup' else type end
+,is_copy_only, user_name
+,backup_start_date,backup_finish_date,backup_name,backupMB=cast(backupMB as bigint),compressedMB=cast(compressedMB as bigint),database_backup_lsn, first_lsn, last_lsn,recovery_model,is_readonly
+,RestoreCMD = 'RESTORE DATABASE '+database_name+' FROM DISK='''+physical_device_name+''' WITH REPLACE,STATS=10'+iif(is_broker_enabled=1,',NEW_BROKER','')+iif(is_cdc_enabled=1,',KEEP_CDC','')+iif(is_replicated=1,',KEEP_REPLICATION','') +',MOVE '''+dataLogicalname+''' TO '''+dataPhysicalName+''' , MOVE '''+logLogicalname+''' TO '''+logPhysicalName+''' '
+from lastDBBackup
+where row = 1
+order by database_name,backup_start_date
+
+
+-- Step 4.  Rejoin databases to AAG
+-- After all databases have been restored on the Primary,
+--	Delete databases from secondary servers 
+--	Execute Z:\InstallScripts\ag_database.bat to add previously evicted databases to HA
+-- On primary server Admin CMD shell
+-- cd c:\<sqlVersion>
+--.\add_db_to_ag
+--  servers  (first is primary, second is DR node, third is HA node)
+--  instance
+--  databases
+--  availability_group_name
+--  sa_password
+--Eg: .\add_db_to_ag "pw0991sqs005n1.detnsw.win,pw0992sqs005n2.detnsw.win,pw0991sqs005n3.detnsw.win" fxawms1 "awms2" pw0000sqs005a1 <sa password from keepass>
+
+

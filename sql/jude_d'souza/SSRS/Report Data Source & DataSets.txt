@@ -1,0 +1,34 @@
+--Get the Data Sources & DataSets used in the Report
+
+;WITH XMLNAMESPACES(DEFAULT 'http://schemas.microsoft.com/sqlserver/reporting/2010/01/reportdefinition', -- reportdefinition can be 2005 to 2016.  See xmlns in reportXML
+							'http://schemas.microsoft.com/SQLServer/reporting/reportdesigner' AS rd,
+							'http://schemas.microsoft.com/sqlserver/reporting/2006/03/reportdatasource' AS sd)
+SELECT  
+	ReportName = rpt.Name, rpt.DSPath
+	,RptDataSource   = dsrc.x.value('(@Name)[1]', 'VARCHAR(256)')
+	--,DataSourceReference   = dsrc.x.value('(DataSourceReference)[1]','VARCHAR(250)')
+	,DataProvider = ISNULL(dsrc.x.value('(ConnectionProperties/DataProvider)[1]','VARCHAR(256)'), dsdef.x.value('sd:Extension[1]' , 'varchar(256)'))
+	,ConnectString = ISNULL(dsrc.x.value('(ConnectionProperties/ConnectString)[1]','VARCHAR(512)'), dsdef.x.value('sd:ConnectString[1]' , 'varchar(512)'))
+	--,DataProvider = dsdef.x.value('sd:Extension[1]' , 'varchar(256)')
+	--,ConnectString = dsdef.x.value('sd:ConnectString[1]' , 'varchar(512)')
+	,DataSetName   = dset.x.value('(@Name)[1]', 'VARCHAR(256)')
+	,QryDataSource  = dset.x.value('(Query/DataSourceName)[1]','VARCHAR(256)')
+	,QueryCommandText   = dset.x.value('(Query/CommandText)[1]','VARCHAR(MAX)')
+	,rpt.reportXML, rpt.dsXML
+	,rpt.reportCreated,rpt.reportModified, dataSourceCreated, dataSourceModified
+FROM (	SELECT rdl.Name,rdl.path,reportXML=CONVERT(XML,CONVERT(VARBINARY(MAX),rdl.Content)),DSname=sds.Name,DSPath=sds.Path,dsXML=CONVERT(xml, CONVERT(varbinary(max),SDS.content)), reportCreated=rdl.CreationDate,reportModified=rdl.ModifiedDate, dataSourceCreated=sds.CreationDate,dataSourceModified=sds.ModifiedDate
+        FROM  dbo.Catalog rdl
+		LEFT JOIN (		dbo.DataSource AS DS 
+			INNER JOIN dbo.Catalog SDS on SDS.ItemID = DS.Link AND SDS.Type = 5	
+		) ON DS.ItemID = rdl.ItemID --AND DS.Link is not null
+        WHERE  rdl.Content is not null AND  rdl.Type  = 2 
+			AND  rdl.PATH  = '/eT4LFleetMgmt/SubReports/Servers - eT4LServer_SCOM_Down'  --< EDIT
+        ) rpt
+outer APPLY reportXML.nodes('/Report/DataSets/DataSet') dset ( x )
+outer APPLY reportXML.nodes('/Report/DataSources/DataSource') dsrc ( x )
+outer APPLY dsXML.nodes('sd:DataSourceDefinition') AS dsdef ( x )
+where dsrc.x.value('(@Name)[1]', 'VARCHAR(256)') = dset.x.value('(Query/DataSourceName)[1]','VARCHAR(256)') 
+--and dset.x.value('(@Name)[1]', 'VARCHAR(256)') = 'eT4LServer_SCOM_Down'    --< EDIT
+ORDER BY DataSetName ;
+
+

@@ -1,0 +1,88 @@
+
+create table #agdb (
+	database_id int,
+	role tinyint,
+	role_desc nvarchar(60), 
+	synchronization_health_desc nvarchar(60)
+)
+if cast (serverproperty('ProductMajorVersion') as int) >= 11
+begin
+	insert into #agdb
+	select db.database_id, rcs.role, rcs.role_desc, rcs.synchronization_health_desc from sys.databases db 
+	inner join sys.dm_hadr_availability_replica_states rcs on rcs.replica_id = db.replica_id
+end
+
+SELECT distinct ServerName=@@servername,[DBName]=db.Name, ID=db.database_id
+--,[SnapshotOf]=case when db.source_database_id is null then NULL else (select name from master.sys.databases where db.database_id=db.source_database_id) end
+,CL=db.compatibility_level
+,mf.name AS Logical_Name,mf.type_desc--,mf.Physical_Name
+,Drive=vs.volume_mount_point,totalGB=vs.total_bytes/1073741824,availableGB=vs.available_bytes/1073741824
+,FileSizeMB=vfs.size_on_disk_bytes/1048576,maxSizeMB=mf.max_size/128
+,growthType=case mf.is_percent_growth when 1 then 'percentage' else 'size in 8K pages' end
+,NextGrowthMB=(case mf.is_percent_growth when 1 then cast((mf.growth*vfs.size_on_disk_bytes/100.)/1048576 as float) else cast(mf.growth/128. as float) end)
+,db.log_reuse_wait_desc,recovery_model_desc
+,auto_truncate_log = case when drs.last_log_backup_lsn is NULL then 1 else 0 end --If NULL, the database is not maintaining a sequence of log backups and it is in auto-truncate mode
+,db.page_verify_option_desc,db.is_auto_close_on,db.is_auto_shrink_on
+,LastGoodCheckDbTime=DATABASEPROPERTYEX(db.Name,'LastGoodCheckDbTime') -- DBCC DBINFO('StackOverflow') WITH TABLERESULTS
+,db.is_published, db.is_merge_published, db.is_distributor, db.is_cdc_enabled
+,db.is_broker_enabled,db.is_fulltext_enabled
+,change_tracking_db = case when ctd.database_id is NULL then 0 else 1 end --, is_auto_cleanup_on,retention_period,retention_period_units,retention_period_units_desc,max_cleanup_version
+,rcs.role_desc as aag_role_desc, rcs.synchronization_health_desc as aag_health_desc
+,dm.mirroring_role_desc, mirroring_state_desc
+,db.state_desc, db.user_access_desc,db.is_read_only
+,db.is_auto_create_stats_on,db.is_auto_update_stats_on,db.is_auto_update_stats_async_on -- ,db.is_auto_create_stats_incremental_on
+,is_allow_snapshot_isolation_on = db.snapshot_isolation_state -- SET ALLOW_SNAPSHOT_ISOLATION ON; requires SET TRANSACTION ISOLATION LEVEL SNAPSHOT at the transaction level
+,db.is_read_committed_snapshot_on -- SET READ_COMMITTED_SNAPSHOT ON; no code change required, based at statement level
+,db.is_master_key_encrypted_by_server,db.is_encrypted
+--,db.target_recovery_time_in_seconds -- copied from model in 2016. Ideally should be 0 for tempdb
+--,db.delayed_durability_desc -- 2014
+--,db.is_query_store_on,db.is_mixed_page_allocation_on -- 2016
+--,db.is_remote_data_archive_enabled -- 2016 - stretched
+,[Owner]=suser_sname(owner_sid)
+,create_date
+,restore_date=(select top 1 rs.restore_date from msdb.dbo.restorehistory rs (nolock) where rs.destination_database_name = db.Name order by rs.restore_history_id desc)
+,SQLVer=serverproperty('ProductMajorVersion')
+,AlterCmd=case when (isnull(rcs.role,1)|isnull(dm.mirroring_role,1)) = 1  then ':connect '+REPLACE(@@SERVERNAME, '\','.'+DEFAULT_DOMAIN()+'.WIN\')+char(10)
+	--+' USE ['+db.Name+']'+char(10)+' DBCC LOGINFO'+char(10)+'GO'+char(10) + 'DBCC SHRINKFILE('+mf.name+',TRUNCATEONLY)'+char(10)+'GO'+char(10)
+	+' USE master'+char(10)+' ALTER DATABASE ['+db.Name+']'-- Using Regex, replace ALTER with \nALTER; replace GO with \nGO\n
+	+ case when (mf.type = 1 or mf.is_percent_growth = 1 or mf.growth = 0 or mf.max_size between 1 and 2097151) 
+		then ' MODIFY FILE (NAME = N'''+mf.name+''', FILEGROWTH = '+cast( CASE 
+			WHEN mf.type_desc='LOG' and vfs.size_on_disk_bytes/10485760 > 512 THEN 512 
+			WHEN (mf.growth*vfs.size_on_disk_bytes/100)/1048576 > 1024 THEN 1024 
+			ELSE power(2.,cast( log((mf.growth*vfs.size_on_disk_bytes/100)/1048576)--,2.) -- SQL 2012+
+				as bigint)) END as varchar(48)) +'MB, MAXSIZE = UNLIMITED) '+char(10)+'GO'+char(10) else ' ' end
+	+ case when db.page_verify_option < 2 then ' SET PAGE_VERIFY CHECKSUM '+char(10)+'GO'+char(10)  else ' ' end 
+	else '' end -- Dont ALTER Secondary databases
+from sys.databases db
+inner join sys.master_files mf on mf.database_id = db.database_id
+outer apply sys.dm_os_volume_stats(mf.database_id, mf.file_id) vs
+inner join sys.database_recovery_status drs on drs.database_id = db.database_id
+inner join sys.database_mirroring dm on dm.database_id = db.database_id
+--left join sys.dm_hadr_availability_replica_states rcs on rcs.replica_id = db.replica_id -- sys.dm_hadr_database_replica_states 
+left join #agdb rcs on rcs.database_id = db.database_id
+left join sys.dm_io_virtual_file_stats(NULL, NULL) vfs ON mf.database_id=vfs.database_id AND mf.FILE_ID=vfs.FILE_ID
+left join sys.change_tracking_databases ctd on ctd.database_id = db.database_id
+where db.database_id > 5 --and mf.type_desc  = 'LOG'
+	--and (mf.is_percent_growth = 1 or mf.growth = 0) -- MUST FIX
+	--and (db.is_auto_shrink_on = 1 or db.is_auto_close_on = 1 or db.page_verify_option < 2)	-- MUST FIX
+	--and (db.is_published | db.is_merge_published | db.is_distributor | db.is_cdc_enabled | db.is_broker_enabled) = 1 -- BE AWARE
+	--and (db.is_master_key_encrypted_by_server | db.is_encrypted) = 1 -- BE AWARE
+	--and db.compatibility_level < cast(serverproperty('ProductMajorVersion') as int)*10 -- BE AWARE & NEGOTIATE
+	--and (db.is_auto_create_stats_on | db.is_auto_update_stats_on) = 1	-- DISCUSS
+	--and (db.snapshot_isolation_state | db.is_read_committed_snapshot_on) = 1 -- BE AWARE - impact to tempDB
+
+drop table #agdb
+
+-- Database size by file type with total 
+select mf.database_id,DB=db_name(mf.database_id), mf.type_desc,SizeMB=sum(vfs.size_on_disk_bytes)/1048576
+from sys.master_files mf
+left join sys.dm_io_virtual_file_stats(NULL, NULL) vfs ON mf.database_id=vfs.database_id AND mf.FILE_ID=vfs.FILE_ID
+--where mf.database_id = db_id(N'<dbName>')
+GROUP BY GROUPING SETS((), (mf.database_id), (mf.database_id,mf.type_desc))
+
+-- Database size by drive with total 
+select left(mf.Physical_Name,1),SizeMB=sum(vfs.size_on_disk_bytes)/1048576
+from sys.master_files mf
+left join sys.dm_io_virtual_file_stats(NULL, NULL) vfs ON mf.database_id=vfs.database_id AND mf.FILE_ID=vfs.FILE_ID
+GROUP BY GROUPING SETS((), (left(mf.Physical_Name,1)))
+

@@ -1,0 +1,71 @@
+
+USE MSDB
+go
+
+-- Job and job step complete listing
+;with actn (val,txt) AS (select a.val,a.txt from (values (0,'Unknown'),(1,'QuitWithSuccess'),(2,'QuitWithFailure'),(3,'GotoNextStep'),(4,'GotoStep')) a(val, txt))
+	,notif (val,txt) AS (select n.val,n.txt from (values (0,'Never'),(1,'When the job succeeds'),(2, 'When the job fails'),(3,'When the job completes')) n(val,txt))
+	,opt(val,txt) AS (select n.val,n.txt from (values (2,'Append to output file'), (4,'Write T-SQL job step output to step history'), (8,'Write log to table (overwrite existing history)'), (16,'Write log to table (append to existing history)'), (32,'Write all output to job history'), (64,'Create a Windows event to use as a signal for the Cmd jobstep to abort')) n(val,txt))
+select distinct [Server]=@@servername,
+	job_name = sysjobs.name --,sysjobs.job_id --,sysjobs.date_created,sysjobs.date_modified
+	,JobEnabled=sysjobs.enabled,SchEnabled=jsc.enabled
+	,sysjobsteps.step_id , step_name ,sysjobsteps.database_name--,sysjobsteps.server,sysjobsteps.subsystem
+	--,SSISServer = case when subsystem = 'SSIS' and PATINDEX('%/SERVER %', command) > 0 then SUBSTRING(command, (PATINDEX('%/SERVER %', command)+11),15) else '' end
+	--,EnvRef = case when subsystem = 'SSIS' and PATINDEX('%/ENVREFERENCE %', command) > 0 then SUBSTRING(command, (PATINDEX('%/ENVREFERENCE %', command)+14),2) else '' end
+	,command
+	,on_success_action = success_action.txt + case success_action.val when 4 then cast(on_success_step_id as varchar(2)) else '' end
+	,on_fail_action = fail_action.txt + case fail_action.val when 4 then cast(on_fail_step_id as varchar(2)) else '' end
+	,notify_level_email = email.txt, operator=sysoperators.name,notify_level_eventlog = elog.txt--, delete_level = dellvl.txt
+	,'category'=syscategories.name,jobowner=suser_sname(sysjobs.owner_sid) --, database_user_name, Proxy=sysproxies.name
+	--,last_run_date, last_run_time ,last_run_duration, last_run_outcome, last_run_retries
+	--,retry_attempts,retry_interval
+	--,sysjobsteps.flags,flags2Hex=convert(varbinary,sysjobsteps.flags)
+	,OutputOptions = ISNULL(stuff((select '. '+opt.txt from opt where (opt.val & sysjobsteps.flags) <> 0 for XML PATH ('')),1,2,''), case when output_file_name is NULL then 'None' else 'Overwrite output file' end )
+	,output_file_name
+from msdb.dbo.sysjobs sysjobs (nolock)
+inner join msdb.dbo.sysjobsteps sysjobsteps (nolock) on sysjobs.job_id = sysjobsteps.job_id 
+left join msdb.dbo.syscategories syscategories with (nolock) on sysjobs.category_id = syscategories.category_id 
+left join actn success_action on sysjobsteps.on_success_action = success_action.val
+left join actn fail_action on sysjobsteps.on_fail_action = fail_action.val
+left join notif email on sysjobs.notify_level_email = email.val
+left join notif elog on sysjobs.notify_level_eventlog = elog.val
+left join notif dellvl on sysjobs.delete_level = dellvl.val
+left join msdb.dbo.sysoperators sysoperators on sysoperators.id = sysjobs.notify_email_operator_id
+left join msdb.dbo.sysproxies sysproxies on sysproxies.proxy_id = sysjobsteps.proxy_id
+left join (msdb.dbo.sysjobschedules jsch 
+	inner join msdb.dbo.sysschedules jsc ON jsc.schedule_id = jsch.schedule_id and jsc.enabled = 1
+	) ON sysjobs.job_id = jsch.job_id
+where	--(sysjobs.name LIKE '__Power___ - [12]. Alert Replication%' or sysjobs.name LIKE '__ClientStream___ - Client Mass Updates' or sysjobs.name LIKE '__ClientStream___ - Client Acceptance Expiry Notification' or sysjobs.name LIKE '__ClientStream___ - Nightly Cleanup' or sysjobs.name LIKE '__ClientStream___ - Daily Remove Offshore Default Security Rights')
+--	(sysjobs.name LIKE '__Power - [12]. Alert Replication%' or sysjobs.name LIKE '__ClientStream - Client Mass Updates' or sysjobs.name LIKE '__ClientStream - Client Acceptance Expiry Notification' or sysjobs.name LIKE '__ClientStream - Nightly Cleanup' or sysjobs.name LIKE '__ClientStream - Daily Remove Offshore Default Security Rights')
+sysjobs.name LIKE 'collection_set_%'--and sysjobs.job_id = 0x91764B345EC66A4680D0F2A5CE0B11BE
+--and step_name like 'DBO to Core Replication'
+--and suser_sname(sysjobs.owner_sid) = 'soa'
+--and sysjobsteps.step_id > 1 and step_name not like 'Check Primary Role%'
+--and syscategories.name = 'REPL-LogReader' and
+--and command  like '%pCredentialName%' --'%pwcepsau___sqlbackup.blob.core.windows.net%'
+--and (subsystem = 'SSIS'  or command like '%DTExec%') --and sysjobs.enabled = 1
+order by sysjobs.name , sysjobsteps.step_id
+
+-- List job, schedule & owner details
+-- Also lists references to RS schedule - uncomment if relevant
+;with ft (val,txt) AS (select val,txt from ( values (1,'One time only'), (4,'Daily'), (8,'Weekly'), (16,'Monthly'), (32,'Monthly, relative to freq_interval'), (64,'Runs when the SQL Server Agent service starts'), (128,'Runs when the computer is idle')) a(val, txt))
+SELECT Server=@@servername, JobOwner=suser_sname(job.owner_sid),JobName=job.name,JobEnabled=job.enabled, SchEnabled=jsc.enabled, SchName=jsc.name, jsch.schedule_id,SchOwner=suser_sname(jsc.owner_sid)
+	,Frequency = ft.txt, fsdi=jsc.freq_subday_interval
+--	,rsch.EventType, rsch.LastRunTime
+FROM msdb.dbo.sysjobs job
+--left join  ReportServer.dbo.Schedule rsch on CONVERT(nvarchar(128),rsch.ScheduleId) = job.name
+LEFT JOIN (msdb.dbo.sysjobschedules jsch 
+	INNER JOIN msdb.dbo.sysschedules jsc ON jsc.schedule_id = jsch.schedule_id
+	left join ft on jsc.freq_type = ft.val
+	) ON job.job_id = jsch.job_id 
+order by 1,schedule_id,2
+
+-- List Schedules shared by multiple job
+SELECT  sch.schedule_id, SchName=sch.name,Scheduled=sch.enabled ,jobs=count(*)  , min(job.name), max(job.name)
+--,JobName=job.name,JobEnabled=job.enabled
+FROM msdb..sysjobs job 
+inner join msdb.dbo.sysjobschedules jsc ON job.job_id = jsc.job_id
+inner join msdb.dbo.sysschedules sch ON jsc.schedule_id = sch.schedule_id
+--where sch.schedule_id in (1039)
+group by sch.schedule_id, sch.name,sch.enabled having count(*) > 1
+order by sch.schedule_id, sch.name --, job.name

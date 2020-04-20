@@ -1,0 +1,9 @@
+create table #tmp (tf varchar(6), Status bit, Global bit, Session bit)
+insert into #tmp
+exec ('dbcc tracestatus')
+select sup.tf, instance_createdinstance_created=ep.value,serverproperty('ProductMajorVersion') 
+from (select tf=count(*) from #tmp) sup
+cross apply master.sys.extended_properties ep where name = 'instance_created_datetime'
+--where tf = '7412'
+
+drop table #tmp

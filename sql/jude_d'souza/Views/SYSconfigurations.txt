@@ -1,0 +1,24 @@
+select SERVERPROPERTY ('ProductMajorVersion') as ProductMajorVersion
+,isnull(xpc.value_in_use, 'n/a') as xp_cmdshellEnabled
+,isnull(ese.value_in_use, 'n/a') as externalScriptsEnabled
+,isnull(oap.value_in_use, 'n/a') as oleAutomationProceduresEnabled
+,isnull(coc.value_in_use, 'n/a') as crossDbOwnershipChainingEnabled
+from		(select value_in_use from sys.configurations where name = 'xp_cmdshell'					) as xpc
+outer apply (select value_in_use from sys.configurations where name = 'external scripts enabled'	) as ese
+outer apply (select value_in_use from sys.configurations where name = 'Ole Automation Procedures'	) as oap 
+outer apply (select value_in_use from sys.configurations where name = 'cross db ownership chaining'	) as coc 
+where	(
+	isnull(cast (xpc.value_in_use as int), 0)
+|	isnull(cast (ese.value_in_use as int), 0)
+|	isnull(cast (oap.value_in_use as int), 0)
+|	isnull(cast (coc.value_in_use as int), 0)
+) = 1
+
+
+select SERVERPROPERTY ('ProductMajorVersion') as ProductMajorVersion
+,isnull(css.value_in_use, 'n/a') as clrStrictSecurityEnabled
+from	sys.dm_os_sys_info
+outer apply (select value_in_use from sys.configurations where name = 'clr strict security'	) as css
+where	(
+	isnull(cast (css.value_in_use as int), 1) 
+) = 0

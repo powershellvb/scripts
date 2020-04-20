@@ -1,0 +1,61 @@
+-- https://www.red-gate.com/simple-talk/sql/t-sql-programming/how-forwarded-records-are-read-and-processed-in-a-sql-server-heap/
+
+-- Server level
+SELECT counter = 'Forwarded records/sec by Batch Requests/sec', si.sqlserver_start_time,Days=datediff(day, sqlserver_start_time,getdate()), [ForwardedRecords2BatchRequests]=(a.cntr_value * 1.0 / b.cntr_value),BatchRequests=b.cntr_value,ForwardedRecords=a.cntr_value
+,[per day]=b.cntr_value/datediff(day, sqlserver_start_time,getdate()),[Version]=@@version
+FROM sys.dm_os_performance_counters a
+cross join sys.dm_os_performance_counters b
+cross apply sys.dm_os_sys_info si
+WHERE a.cntr_type = 272696576 and a.counter_name = 'Forwarded records/sec' AND a.object_name like 'MSSQL$%:Access Methods%'
+	and b.cntr_type = 272696576 and b.counter_name = 'Batch Requests/sec' AND b.object_name like 'MSSQL$%:SQL Statistics%'
+	and (a.cntr_value * 1.0 / b.cntr_value) > 1
+
+
+-- Database level
+-- Heap forwarded records - DETAILED
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT top 20 Heap=object_schema_name(i.object_id)+'.'+object_name(i.object_id),i.object_id,ips.partition_number,ips.page_count,SizeMB=ips.page_count/128,ips.record_count,ips.forwarded_record_count,[%forwarded]=ips.forwarded_record_count*100./ips.record_count
+,ips.min_record_size_in_bytes,ips.avg_record_size_in_bytes,ips.max_record_size_in_bytes,ips.avg_page_space_used_in_percent,ips.alloc_unit_type_desc
+,ius.user_seeks,ius.user_scans,ius.user_lookups,ius.user_updates
+,rebuildCmd = 'ALTER TABLE ['+object_schema_name(i.object_id)+'].['+object_name(i.object_id)+'] REBUILD WITH (ONLINE = ON);'
+FROM sys.dm_db_index_physical_stats (DB_ID(), NULL, NULL, NULL, 'DETAILED') AS ips -- database_id , object_id|NULL, index_id|NULL, partition_number|NULL, mode|NULL - LIMITED,SAMPLED,DETAILED. The default (NULL) is LIMITED
+JOIN sys.indexes AS i ON ips.object_id = i.object_id AND ips.index_id = i.index_id and i.index_id = 0 -- HEAP only
+join sys.dm_db_index_usage_stats ius ON ius.DATABASE_ID = DB_ID() AND i.OBJECT_ID = ius.OBJECT_ID AND i.index_id = ius.index_id
+where (ius.user_seeks+ius.user_scans+ius.user_lookups) > 10000
+and ips.forwarded_record_count > 0
+order by ips.forwarded_record_count desc
+
+-- Fill factor does not apply to heaps
+
+/*
+PFS-Page - The PFS Page monitors every single data page in a database by using a byte mask for every data page; so one PFS Page can handle 8,088 data pages.
+If the allocated data page is a heap then SQL Server stores, within the first 2 bits, the information about the extent to which the data page has been filled.
+Bit	Value
+0x00	The data page is empty
+0x01	The data page is filled up to 50%
+0x02	The data page is filled up from 51% to 80%
+0x03	The data page is filled up from 81% to 95%
+0x04	The data page is filled up from 96% to 100%
+--PFS-Page:
+DBCC PAGE (6, 1, 1, 3)  WITH TABLERESULTS;
+
+-- select index column(s) from the table using INDEX=<hint>
+SELECT MessageName, ServerId, Edition,  TimeLogged, BlockNumber, BlockRecipientIndex
+,KeyHashValue=%%lockres%%,[file:page:slot]=sys.fn_PhysLocFormatter(%%physloc%%)
+from MMProdDB.dbo.Message WITH (NOLOCK, INDEX=IX_MessageName)
+WHERE MessageName between 'B5bafe7ed0001' and 'B5bafe7f60001' and
+ sys.fn_PhysLocFormatter(%%physloc%%) like '(1:59386674:%'
+--and %%lockres%% = '(1d1b58a1cca5)'
+--order by 1,2,3
+
+
+--replace dbid,filenum,pagenum with PageID from sys.fn_PhysLocFormatter 
+DBCC page (6,1,59386674,  0) WITH TABLERESULTS -- Metadata: ObjectId & Metadata: IndexId
+
+--SQL 2019
+SELECT page_info.* 
+FROM sys.dm_exec_requests AS d  
+CROSS APPLY sys.fn_PageResCracker (d.page_resource) AS r  
+CROSS APPLY sys.dm_db_page_info(r.db_id, r.file_id, r.page_id, 'LIMITED') AS page_info
+
+*/

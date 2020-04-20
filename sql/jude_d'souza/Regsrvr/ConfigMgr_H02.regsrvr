@@ -1,0 +1,239 @@
+<?xml version="1.0"?>
+<model xmlns="http://schemas.serviceml.org/smlif/2007/02">
+  <identity>
+    <name>urn:uuid:96fe1236-abf6-4a57-b54d-e9baab394fd1</name>
+    <baseURI>http://documentcollection/</baseURI>
+  </identity>
+  <xs:bufferSchema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <definitions xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08">
+      <document>
+        <docinfo>
+          <aliases>
+            <alias>/system/schema/RegisteredServers</alias>
+          </aliases>
+          <sfc:version DomainVersion="1" />
+        </docinfo>
+        <data>
+          <xs:schema targetNamespace="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+            <xs:element name="ServerGroup">
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:any namespace="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" processContents="skip" minOccurs="0" maxOccurs="unbounded" />
+                </xs:sequence>
+              </xs:complexType>
+            </xs:element>
+            <xs:element name="RegisteredServer">
+              <xs:complexType>
+                <xs:sequence>
+                  <xs:any namespace="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" processContents="skip" minOccurs="0" maxOccurs="unbounded" />
+                </xs:sequence>
+              </xs:complexType>
+            </xs:element>
+            <RegisteredServers:bufferData xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08">
+              <instances xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08">
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:ServerGroup xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:RegisteredServers>
+                        <sfc:Collection>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue009_.detnsw_.win\cm12__j00__1</sml:Uri>
+                          </sfc:Reference>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue010_.detnsw_.win\cm12__K00__1</sml:Uri>
+                          </sfc:Reference>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue011_.detnsw_.win\cm12__L00__1</sml:Uri>
+                          </sfc:Reference>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue012_.detnsw_.win\cm12__M00__1</sml:Uri>
+                          </sfc:Reference>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue013_.detnsw_.win\cm12__N00__1</sml:Uri>
+                          </sfc:Reference>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue014_.detnsw_.win\cm12__P00__1</sml:Uri>
+                          </sfc:Reference>
+                          <sfc:Reference sml:ref="true">
+                            <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue015_.detnsw_.win\cm12__Q00__1</sml:Uri>
+                          </sfc:Reference>
+                        </sfc:Collection>
+                      </RegisteredServers:RegisteredServers>
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">ConfigMgr_H02</RegisteredServers:Name>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                    </RegisteredServers:ServerGroup>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue009_.detnsw_.win\cm12__j00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue009.detnsw.win\cm12_j00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue009.detnsw.win\cm12_j00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue009.detnsw.win\cm12_j00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue010_.detnsw_.win\cm12__K00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue010.detnsw.win\cm12_K00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue010.detnsw.win\cm12_K00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue010.detnsw.win\cm12_K00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue011_.detnsw_.win\cm12__L00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue011.detnsw.win\cm12_L00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue011.detnsw.win\cm12_L00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue011.detnsw.win\cm12_L00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue012_.detnsw_.win\cm12__M00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue012.detnsw.win\cm12_M00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue012.detnsw.win\cm12_M00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue012.detnsw.win\cm12_M00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue013_.detnsw_.win\cm12__N00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue013.detnsw.win\cm12_N00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue013.detnsw.win\cm12_N00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue013.detnsw.win\cm12_N00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue014_.detnsw_.win\cm12__P00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue014.detnsw.win\cm12_P00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue014.detnsw.win\cm12_P00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue014.detnsw.win\cm12_P00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+                <document>
+                  <docinfo>
+                    <aliases>
+                      <alias>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02/RegisteredServer/pw0000sqlue015_.detnsw_.win\cm12__Q00__1</alias>
+                    </aliases>
+                    <sfc:version DomainVersion="1" />
+                  </docinfo>
+                  <data>
+                    <RegisteredServers:RegisteredServer xmlns:RegisteredServers="http://schemas.microsoft.com/sqlserver/RegisteredServers/2007/08" xmlns:sfc="http://schemas.microsoft.com/sqlserver/sfc/serialization/2007/08" xmlns:sml="http://schemas.serviceml.org/sml/2007/02" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                      <RegisteredServers:Parent>
+                        <sfc:Reference sml:ref="true">
+                          <sml:Uri>/RegisteredServersStore/ServerGroup/DatabaseEngineServerGroup/ServerGroup/ConfigMgr__H02</sml:Uri>
+                        </sfc:Reference>
+                      </RegisteredServers:Parent>
+                      <RegisteredServers:Name type="string">pw0000sqlue015.detnsw.win\cm12_Q00_1</RegisteredServers:Name>
+                      <RegisteredServers:ServerName type="string">pw0000sqlue015.detnsw.win\cm12_Q00_1</RegisteredServers:ServerName>
+                      <RegisteredServers:ServerType type="ServerType">DatabaseEngine</RegisteredServers:ServerType>
+                      <RegisteredServers:ConnectionStringWithEncryptedPassword type="string">server=pw0000sqlue015.detnsw.win\cm12_Q00_1;integrated security=true</RegisteredServers:ConnectionStringWithEncryptedPassword>
+                      <RegisteredServers:CredentialPersistenceType type="CredentialPersistenceType">None</RegisteredServers:CredentialPersistenceType>
+                    </RegisteredServers:RegisteredServer>
+                  </data>
+                </document>
+              </instances>
+            </RegisteredServers:bufferData>
+          </xs:schema>
+        </data>
+      </document>
+    </definitions>
+  </xs:bufferSchema>
+</model>

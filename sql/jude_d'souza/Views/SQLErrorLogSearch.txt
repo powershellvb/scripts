@@ -1,0 +1,54 @@
+-- Read All SQL Server Error Logs 
+SET NOCOUNT ON
+DECLARE 
+	@searchStr    VARCHAR(512) = '19421' --< EDIT search string
+	,@startDate    DATETIME = NULL -- '2020-03-12 23:59' --EDIT optional earliest date,
+	,@maxLog       INT;
+DECLARE @errorLogs TABLE (
+	LogID    INT,
+	LogDate  DATETIME,
+	LogSize  BIGINT    
+);
+INSERT INTO @errorLogs
+EXEC sys.sp_enumerrorlogs;
+--Determine the oldest log that will be included in the search.
+
+if @startDate is NULL
+	SELECT TOP 1 @maxLog = LogID
+	FROM @errorLogs
+	ORDER BY [LogID] DESC;
+else
+	SELECT TOP 1 @maxLog = LogID
+	FROM @errorLogs
+	WHERE [LogDate] <= @startDate
+	ORDER BY [LogDate] DESC;
+
+declare @msg varchar(64) = 'reading from log # ' + cast( @maxLog as varchar(3))
+RAISERROR(@msg, 0, 1) WITH NOWAIT
+
+DECLARE @logData TABLE (
+	LogID       INT,
+	LogDate     DATETIME,
+	ProcInfo    VARCHAR(64),
+	LogText     VARCHAR(MAX)    
+);
+DECLARE @1log      TABLE (
+	LogDate     DATETIME,
+	ProcInfo    VARCHAR(64),
+	LogText     VARCHAR(MAX)    
+);
+WHILE @maxLog >= 0
+BEGIN
+	DELETE @1Log;
+	INSERT INTO @1Log
+	EXEC sys.sp_readerrorlog @maxLog, 1, @searchStr;
+	
+	INSERT INTO @logData
+	SELECT @maxLog, [LogDate], [ProcInfo], [LogText]
+	FROM @1log;
+	SET @maxLog -= 1;
+END
+
+SELECT [LogID], [LogDate], [LogText], [ProcInfo]
+FROM @logData
+ORDER BY [LogDate];

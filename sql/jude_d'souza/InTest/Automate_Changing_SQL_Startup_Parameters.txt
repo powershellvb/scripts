@@ -1,0 +1,39 @@
+-- https://gallery.technet.microsoft.com/scriptcenter/How-to-add-startup-1b03e3dd
+-- http://www.mikefal.net/2015/12/01/managing-sql-server-services-with-powershell/
+
+declare @Parameters				varchar(max)='-T1222',
+			@Argument_Number	int,
+			@Argument			varchar(max),
+			@Reg_Hive			varchar(max),
+			@CMD				varchar(max)
+---------------------------------------------------------------------------------------------------------{Parameter Cleanup}
+if exists (select * from sys.dm_server_registry where value_name like 'SQLArg%' and convert(varchar(max),value_data)=@Parameters)
+begin 
+			select 
+			@Argument=value_name,@Reg_Hive=substring(registry_key,len('HKLM\')+1,len(registry_key))
+			from sys.dm_server_registry where value_name like 'SQLArg%' and convert(varchar(max),value_data)=@Parameters
+		
+			set  @CMD='master..xp_regdeletevalue
+									''HKEY_LOCAL_MACHINE'',
+									'''+@Reg_Hive+''',
+									'''+@Argument+''''
+			exec (@CMD)
+end 
+---------------------------------------------------------------------------------------------------------{Add Parameter}
+--select * from sys.dm_server_registry where value_name like 'SQLArg%'
+select @Reg_Hive=substring(registry_key,len('HKLM\')+1,len(registry_key)) ,@Argument_Number=max(convert(int,right(value_name,1)))+1
+from sys.dm_server_registry
+ where value_name like 'SQLArg%' 
+group by substring(registry_key,len('HKLM\')+1,len(registry_key)) 
+
+set @Argument= 'SQLArg'+convert(varchar(1),@Argument_Number)
+select @Argument,@Reg_Hive
+
+set  @CMD='master..xp_regwrite
+''HKEY_LOCAL_MACHINE'',
+'''+@Reg_Hive+''',
+'''+@Argument+''',
+''REG_SZ'',
+'''+@Parameters+''''
+
+exec  (@CMD)

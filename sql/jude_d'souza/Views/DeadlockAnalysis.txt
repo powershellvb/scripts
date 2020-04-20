@@ -1,0 +1,251 @@
+/*  Read deadlocks out of system_health Xevent
+;with deadlocks AS (
+SELECT file_name, file_offset, target_data=CAST(event_data as xml),rownum = ROW_NUMBER () OVER (PARTITION BY file_name, file_offset ORDER BY file_offset)
+FROM sys.fn_xe_file_target_read_file('system_health*.xel', null, null, null)
+where object_name = 'xml_deadlock_report'
+)
+select [Occurred]=DATEADD(hour,CAST(DATEDIFF(HH,GETUTCDATE(),GETDATE()) AS INT), deadlocks.target_data.value('(/event/@timestamp)[1]','datetime')),
+	deadlocks.file_name, deadlocks.file_offset, deadlocks.target_data
+from deadlocks
+*/
+
+with Deadlock AS (
+	select ROW_NUMBER() OVER (ORDER BY (SELECT capture_time)) AS Id,*
+	from monitor.SystemHealth.Deadlock_report dl
+	--Where capture_time > '2019-07-01'		--< Edit date
+)
+--select Deadlock.id,Deadlock.capture_time, Deadlock.target_data FROM Deadlock where Deadlock.capture_time > 2019-03-29 order by 1
+, Process AS (
+	SELECT Deadlock.id, 
+	 P.value('(@id)[1]', 'varchar(50)') AS ProcessId
+	, P.value('(@spid)[1]', 'int') AS Spid
+	, P.value('(@lockMode)[1]', 'varchar(50)') as LockMode
+	, P.value('(@isolationlevel)[1]', 'varchar(50)') as Isolationlevel
+	, P.value('(@transactionname)[1]', 'varchar(50)') as TransactionName
+	, P.value('(@waitresource)[1]', 'varchar(100)') as WaitResource
+	, P.value('(@currentdbname)[1]', 'varchar(200)') as CurrentDB
+	, P.value('(@clientapp)[1]', 'varchar(200)') as AppName
+	, P.value('(@loginname)[1]', 'varchar(50)') as LoginName
+	, P.value('(@hostname)[1]', 'varchar(50)') as HostName
+	, P.value('(@hostpid)[1]', 'varchar(50)') as Hostpid
+	, P.value('(inputbuf)[1]', 'varchar(max)') as Command
+	, P.value('(./executionStack/frame)[1]', 'varchar(1000)') as SQLText
+	, P.value('(./executionStack/frame/@procname)[1]', 'varchar(100)') as SProc
+	FROM Deadlock
+	CROSS APPLY Deadlock.target_data.nodes('/event/data/value/deadlock/process-list/process') AS X3 ( P )
+)
+, Victim AS (	
+	select Deadlock.id, V.value('(@id)[1]', 'varchar(50)') AS VictimId
+	FROM Deadlock
+	CROSS APPLY Deadlock.target_data.nodes('/event/data/value/deadlock/victim-list/victimProcess') AS X2 ( V )
+)
+, Winner AS (
+	select Process.id, Process.ProcessId AS VictorId
+	from Deadlock 
+	inner join Process on Process.id = Deadlock.id and Process.ProcessId not in (select vp.VictimId from Victim vp where vp.id = Process.id)
+)
+, Resource AS (
+	SELECT Deadlock.id
+	, ROW_NUMBER() OVER (PARTITION BY Deadlock.id ORDER BY (SELECT NULL)) AS ResId
+	, R.value('(@dbid)[1]', 'int') AS DbId
+	, R.value('(@objectname)[1]', 'sysname') AS ObjName
+	, R.value('(@indexname)[1]', 'sysname') AS IdxName
+	, R.value('(@associatedObjectId)[1]', 'bigint') AS HobtId
+	, R.query('owner-list/owner') AS OwnerList
+	, R.query('waiter-list/waiter') AS WaiterList
+	, R.value('local-name(.)', 'varchar(15)') AS LockLevel
+	FROM Deadlock
+	CROSS APPLY Deadlock.target_data.nodes('/event/data/value/deadlock/resource-list/child::node()') AS X4 ( R )
+)
+, ResOwner AS (
+	SELECT r.Id
+	, r.ResId
+	, RO.value('(@id)[1]', 'varchar(50)') AS OwnerProcessId
+	, RO.value('(@mode)[1]', 'varchar(8)') AS OwnerLockMode
+	FROM Resource r
+	CROSS APPLY r.OwnerList.nodes('./owner') AS X5 ( RO )
+)
+, ResWaiter AS (
+	SELECT r.Id
+	, r.ResId
+	, RW.value('(@id)[1]', 'varchar(50)') AS WaiterProcessId
+	, RW.value('(@mode)[1]', 'varchar(8)') AS WaiterLockMode
+	, RW.value('(@requestType)[1]', 'varchar(16)') AS WaiterRequestType
+	FROM Resource r
+	CROSS APPLY r.WaiterList.nodes('./waiter') AS X6 ( RW )
+)
+SELECT 
+	Deadlock.id,Deadlock.capture_time
+	, [W-CurrentDB]=wp.CurrentDB
+	, [W-OwnObj]=rod.ObjName
+	, [W-OwnIdx]=rod.IdxName
+	, [W-OwnLL]=rod.LockLevel
+	, [W-OwnLM]=ro.OwnerLockMode
+	, [W-WaitObj]=rwd.ObjName
+	, [W-WaitIdx]=rwd.IdxName
+	, [W-WaitLL]=rwd.LockLevel
+	, [W-WaitLM]=rw.WaiterLockMode
+	
+	, [V-CurrentDB]=vp.CurrentDB
+	, [V-OwnObj]=vrod.ObjName
+	, [V-OwnIdx]=vrod.IdxName
+	, [V-OwnLL]=vrod.LockLevel
+	, [V-OwnLM]=vro.OwnerLockMode
+	, [V-WaitObj]=vrwd.ObjName
+	, [V-WaitIdx]=vrwd.IdxName
+	, [V-WaitLL]=vrwd.LockLevel
+	, [V-WaitLM]=vrw.WaiterLockMode
+
+	, w.VictorId 
+	, [W-Spid]=wp.Spid
+	, [W-Isolationlevel]=wp.Isolationlevel,[W-WaitResource]=wp.WaitResource--,[W-TransactionName]=wp.TransactionName
+	, [W-HostName]=wp.HostName
+	, [W-HostPid]=wp.HostPid
+	, [W-AppName]=wp.AppName
+	, [W-LoginName]=wp.LoginName
+	, [W-SQLText]=wp.SQLText
+
+	, v.VictimId
+	, [V-Spid]=vp.Spid
+	, [V-Isolationlevel]=vp.Isolationlevel,[V-WaitResource]=vp.WaitResource--,[V-TransactionName]=vp.TransactionName
+	, [V-HostName]=vp.HostName
+	, [V-HostPid]=vp.HostPid
+	, [V-AppName]=vp.AppName
+	, [V-LoginName]=vp.LoginName
+	, [V-SQLText]=vp.SQLText
+	, Deadlock.target_data
+FROM Deadlock
+LEFT JOIN Winner w ON w.Id = Deadlock.id
+LEFT JOIN Process wp ON wp.Id = Deadlock.id AND wp.ProcessId = w.VictorId
+LEFT JOIN ResOwner ro ON ro.Id = Deadlock.id AND ro.OwnerProcessId = w.VictorId -- resource the victor owns
+LEFT JOIN Resource rod ON rod.Id = Deadlock.id AND rod.ResId = ro.ResId -- resource details the victor is waiting on
+LEFT JOIN ResWaiter rw ON rw.Id = Deadlock.id AND rw.WaiterProcessId = w.VictorId -- resource the victor is waiting on
+LEFT JOIN Resource rwd ON rwd.Id = Deadlock.id AND rwd.ResId = rw.ResId -- resource details the victor is waiting on
+ 
+LEFT JOIN Victim v ON v.Id = Deadlock.id
+LEFT JOIN Process vp ON vp.Id = Deadlock.id AND vp.ProcessId = v.VictimId 
+LEFT JOIN ResOwner vro ON vro.Id = Deadlock.id AND vro.OwnerProcessId = v.VictimId -- resource the victor owns
+LEFT JOIN Resource vrod ON vrod.Id = Deadlock.id AND vrod.ResId = vro.ResId -- resource details the victor is waiting on
+LEFT JOIN ResWaiter vrw ON vrw.Id = Deadlock.id AND vrw.WaiterProcessId = v.VictimId -- resource the victor is waiting on
+LEFT JOIN Resource vrwd ON vrwd.Id = Deadlock.id AND vrwd.ResId = vrw.ResId -- resource details the victor is waiting on
+--where rwd.DbId = 6 -- Invoice
+-- capture_time > '2019-12-06'
+ORDER BY Deadlock.id
+
+-- Were events dropped
+SELECT s.name,s.create_time,s.buffer_policy_desc,s.dropped_event_count,s.dropped_buffer_count,s.largest_event_dropped_size
+FROM sys.dm_xe_sessions AS s where s.name = 'system_health'
+
+-- Number of lock requests per second that resulted in a deadlock.
+SELECT sqlserver_start_time,pc.object_name,pc.counter_name,pc.instance_name,pc.cntr_value
+,Days=datediff(day, sqlserver_start_time,getdate()),[per day]=pc.cntr_value/datediff(day, sqlserver_start_time,getdate()),SQLVersion=serverproperty('ProductMajorVersion')
+FROM sys.dm_os_performance_counters  pc
+cross apply sys.dm_os_sys_info si
+WHERE cntr_type = 272696576 AND counter_name = 'Number of Deadlocks/sec' and instance_name = '_Total'
+and pc.cntr_value/datediff(day, sqlserver_start_time,getdate()) > 20 
+
+-- correlate with errorlog
+create table #dl (LogDate  datetime,ProcessInfo  varchar(16), [Text] varchar(max))
+insert into #dl
+EXEC sp_readerrorlog 0, 1, 'Deadlock encountered .... Printing deadlock information'
+select MinDeadLogDate = min(LogDate), MaxDeadLogDate = max(LogDate), Deadlocks=count(*), CaptureTime = getdate() from #dl
+drop table #dl
+
+/*
+--select top 10 sys.fn_PhysLocFormatter(%%physloc%%) AS [file:page:slot], %%lockres%%, * from INVOICES_COLLECTOR.COLL.SystemWideMutex (nolock) --where %%lockres%% = '(5d0164fb1eac)'
+SELECT MessageName, ServerId, Edition ,KeyHashValue=%%lockres%%,[file:page:slot]=sys.fn_PhysLocFormatter(%%physloc%%)
+from MMProdDB.dbo.Message WITH (NOLOCK, INDEX=IX_MessageName)
+WHERE sys.fn_PhysLocFormatter(%%physloc%%) like '(1:59386674:%' -- 
+--and %%lockres%% = '(1d1b58a1cca5)'
+--order by 1,2,3
+*/
+
+/*  Considerations
+
+When a resource objectname (table) is not directly referenced in code, 
+look for triggers (Triggers.txt) and Cascade foreign keys (ForeignKeys.txt).
+
+Lock Resources
+When SQL Server tries to determine whether a requested lock can be granted, 
+it checks the sys.dm_tran_locks view to determine whether a matching lock with a conflicting lock mode already exists.
+It compares locks by looking at the database ID (resource_database_ID), 
+	the values in the resource_description and resource_associated_entity_id columns, and the type of resource locked.
+SQL Server knows nothing about the meaning of the resource description. 
+It simply compares the strings identifying the lock resources to look for a match. 
+If it finds a match with a request_status value of GRANT, it knows the resource is already locked; 
+it then uses the lock compatibility matrix to determine whether the current lock is compatible with the one being requested.
+
+Where locks are put in Database:
+Level: Resource.
+---------------
+RID: db_id:file_id:page_no:slot number. RID Used to lock a single row within a table.
+KEY: db_id:hobt_id (index key hash value). Row lock within an index. It means primary key, Candidate Key, Secondary key etc.
+PAG: db_id:file_id:page_no. 8-kilobyte (KB) data page or index page. Lock can be place on Page Level also, it means if particular page is locks so another user cannot update data on it.
+EXT: db_id:file_id:extent_no. Contiguous group of eight data pages which can includes index pages also.
+OBJECT: db_id:object_id or resource_associated_entity_id. Complete table, including all data and indexes.
+DB: db_id or resource_database_ID. Entire Database can be locked for some type of users which have read permission on database.
+
+
+The Lock mode:
+
+Shared(S) - Used for select operations
+Enable other sessions to perform select operations but prevent updates 
+read-only operations
+Operation with SELECT statement Generally use in Shared mode .
+
+Exclusive(X) - Used for DML operations
+Prevents other users from accessing the resource.
+Operations, such as INSERT, UPDATE, or DELETE means DML query. Ensures that multiple updates cannot be made to the same resource at the same time.
+
+Update(U) - Preliminary stage for exclusive lock. Used by the server when filtering the records to be modified
+Prevents other update locks
+A solution to the cycle deadlock problem
+
+Intent - Used for establish a lock Hierarchy.
+types of intent locks: 
+intent shared (IS),
+intent exclusive (IX)
+shared with intent exclusive (SIX).
+
+Schema - Used when an operation dependent on the schema of a table is executing.
+types of schema locks:
+Schema modification (Sch-M) and 
+Schema stability (Sch-S).
+
+Bulk Update (BU) - Used when bulk-copying data into a table and the TABLOCK hint is specified. Generally use when user want to insert huge data in database
+
+Sch-S = Schema stability. Ensures that a schema element, such as a table or index, is not dropped while any session holds a schema stability lock on the schema element.
+Sch-M = Schema modification. Must be held by any session that wants to change the schema of the specified resource. Ensures that no other sessions are referencing the indicated object.
+S = Shared. The holding session is granted shared access to the resource.
+U = Update. Indicates an update lock acquired on resources that may eventually be updated. 
+	It is used to prevent a common form of deadlock that occurs when multiple sessions lock resources for potential update at a later time.
+X = Exclusive. The holding session is granted exclusive access to the resource.
+IS = Intent Shared. Indicates the intention to place S locks on some subordinate resource in the lock hierarchy.
+IU = Intent Update. Indicates the intention to place U locks on some subordinate resource in the lock hierarchy.
+IX = Intent Exclusive. Indicates the intention to place X locks on some subordinate resource in the lock hierarchy.
+SIU = Shared Intent Update. Indicates shared access to a resource with the intent of acquiring update locks on subordinate resources in the lock hierarchy.
+SIX = Shared Intent Exclusive. Indicates shared access to a resource with the intent of acquiring exclusive locks on subordinate resources in the lock hierarchy.
+UIX = Update Intent Exclusive. Indicates an update lock hold on a resource with the intent of acquiring exclusive locks on subordinate resources in the lock hierarchy.
+BU = Bulk Update. Used by bulk operations.
+
+RangeS-S = Shared lock on the range between keys; shared lock on the key at the end of the range
+RangeS-U = Shared lock on the range between keys; update lock on the key at the end of the range
+RangeIn-Null = Exclusive lock to prevent inserts on the range between keys; no lock on the keys themselves
+RangeX-X = Exclusive lock on the range between keys; exclusive lock on the key at the end of the range
+RangeIn-S = Conversion lock created by S and RangeIn_Null lock
+RangeIn-U = Conversion lock created by U and RangeIn_Null lock
+RangeIn-X = Conversion of X and RangeIn_Null lock
+RangeX-S = Conversion of RangeIn_Null and RangeS_S lock
+RangeX-U = Conversion of RangeIn_Null and RangeS_U lock
+*/
+
+-- Lock Compatibility matrix:
+-- https://www.oreilly.com/library/view/microsoft-sql-server/9780134084473/ch37lev1sec8.html
+
+-- Further reading - 
+-- https://www.red-gate.com/simple-talk/sql/database-administration/handling-deadlocks-in-sql-server/
+-- https://www.microsoftpressstore.com/articles/article.aspx?p=2233327&seqNum=3
+-- https://www.sqlshack.com/understanding-the-xml-description-of-the-deadlock-graph-in-sql-server/
+-- https://www.sqlshack.com/locking-sql-server/
+-- https://www.red-gate.com/simple-talk/sql/performance/sql-server-deadlocks-by-example/
+

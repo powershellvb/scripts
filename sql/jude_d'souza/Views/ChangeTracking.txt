@@ -1,0 +1,17 @@
+-- Change Tracking
+-- https://www.mssqltips.com/sqlservertip/1819/using-change-tracking-in-sql-server-2008/
+SELECT DB=db_name(database_id),* FROM sys.change_tracking_databases 
+SELECT TrackedTable=object_schema_name(object_id)+'.'+object_name(object_id),* FROM sys.change_tracking_tables order by 1
+
+SELECT TrackedTable=object_schema_name(it.parent_object_id)+'.'+object_name(it.parent_object_id),it.name,it.internal_type_desc,i.name,i.type_desc, p.rows 
+FROM sys.internal_tables it
+inner join sys.indexes i on i.object_id = it.object_id and i.index_id = 1
+inner join sys.partitions p on p.object_id = it.object_id and p.index_id = i.index_id
+where internal_type = 209  
+order by 1
+
+
+SELECT CHANGE_TRACKING_CURRENT_VERSION ()
+SELECT CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.EP_Malware'))
+SELECT * FROM CHANGETABLE (CHANGES EP_Malware,0) as CT ORDER BY SYS_CHANGE_VERSION
+

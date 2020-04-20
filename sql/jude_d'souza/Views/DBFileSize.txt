@@ -1,0 +1,21 @@
+use tempdb;
+select df.size/128 AS 'TotalSizeinMB', mf.size/128 AS 'StartupSizeMB'
+, CAST(df.size/128.0 - (FILEPROPERTY(df.name, 'SpaceUsed')/128.0) AS INT) AS 'AvailableSpaceInMB' 
+, CAST(FILEPROPERTY(df.name, 'SpaceUsed')/128.0 AS INT) AS 'ActualSpaceUsedInMB'
+, CAST(((FILEPROPERTY(df.name, 'SpaceUsed')*100.0)/df.size) AS INT) AS '%SpaceUsed' 
+,growthType=case mf.is_percent_growth when 1 then 'percentage' else 'size in 8K pages' end, mf.growth, NextGrowthMB=case mf.is_percent_growth when 1 then (mf.growth*df.size/128/100) else mf.growth/128 end
+,df.state_desc,df.name,df.file_id,df.physical_name
+from sys.database_files df	-- current DB
+inner join sys.master_files mf on database_id = db_id() and mf.file_id = df.file_id 
+where df.type_desc = 'ROWS'
+
+-- Across all files
+select sum(df.size)/128 AS 'TotalSizeinMB', sum(mf.size)/128 AS 'StartupSizeMB'
+, CAST(sum(df.size)/128.0 - sum((FILEPROPERTY(df.name, 'SpaceUsed'))/128.0) AS INT) AS 'AvailableSpaceInMB' 
+, CAST(sum(FILEPROPERTY(df.name, 'SpaceUsed'))/128.0 AS INT) AS 'ActualSpaceUsedInMB'
+, CAST(((sum(FILEPROPERTY(df.name, 'SpaceUsed'))*100.0)/sum(df.size)) AS INT) AS '%SpaceUsed' 
+, CAST(((sum(FILEPROPERTY(df.name, 'SpaceUsed'))*100.0)/sum(mf.size)) AS INT) AS '%SpaceUsedofStartup' 
+--,df.state_desc,df.name,df.file_id,df.physical_name
+from sys.database_files df	-- current DB
+inner join sys.master_files mf on database_id = db_id() and mf.file_id = df.file_id 
+where df.type_desc = 'ROWS'

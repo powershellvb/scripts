@@ -1,0 +1,80 @@
+
+--requires SQL 2012+
+select --[Server]=@@servername,
+	OptAdHocWL=oaw.value_in_use
+	,recoveryInterval=rim.value_in_use
+	,maxdop=dop.value_in_use,CTP=ctp.value_in_use
+	,LogicalCPUs=cpu_count,PhysicalCPUs=cpu_count/hyperthread_ratio,logical_cores_per_physical_core=hyperthread_ratio
+	,max_workers_count	--,((scheduler_count - 4) * 8) + 256 as max_workers_count_calculation
+	--,[VAS Allocation(32bit)]=(max_workers_count * .5) + 256 --(MaxWorkerThreads * StackSize(KB)) + DefautReservationSize (controlled by -g)
+	-- 256 is the default. All VAS regions are multiple of 64kb. In turn binding of VAS to physical memory is done based on underlting page size: 4 or 8kb 
+	--,[-goption(32bit)]=256 + (64*1)
+	,scheduler_count 
+	,scheduler_total_count 
+	,maxservermem=mem.value_in_use
+	,[% of Phys]=cast(mem.value_in_use as int)*100/(physical_memory_kb / 1024)
+	,physical_memory_kb / 1024 as [PhysicalMB]
+	,availableMB=sm.available_physical_memory_kb/1024
+	,locked_page_allocations_mb=pm.locked_page_allocations_kb/1024
+	,virtual_memory_kb / 1024 / 1024  as [VirtualGB]
+	,committed_target_kb / 1024 / 1024  as [ComTargetGB]
+	,committed_kb / 1024 / 1024  as [CommittedGB]
+	,visible_target_kb / 1024 / 1024  as [VisTargetGB]
+	,stack_size_in_bytes  / 1024 as stack_size_in_KB
+	,CLRenabled=clr.value_in_use
+	,virtual_machine_type_desc
+	,sqlserver_start_time
+	,IsHadrEnabled=SERVERPROPERTY ('IsHadrEnabled'), windows_release, SQLVersion=SERVERPROPERTY('ProductMajorVersion')
+from sys.dm_os_sys_info si
+cross apply sys.dm_os_windows_info wi
+cross apply sys.dm_os_process_memory pm -- memory allocations attributed to the SQL Server process space excludes those that bypass internal memory management routines
+cross join sys.dm_os_sys_memory sm  -- memory information from the operating system
+outer apply sys.configurations dop 
+outer apply sys.configurations ctp 
+outer apply sys.configurations mem  
+outer apply sys.configurations oaw
+outer apply sys.configurations rim 
+outer apply sys.configurations clr 
+where dop.name like 'max degree of parallelism'
+and ctp.name like 'cost threshold for parallelism'
+and mem.name like 'max server memory (MB)'
+and oaw.name like 'optimize for ad hoc workloads'
+and rim.name like 'recovery interval (min)'
+and clr.name like 'clr enabled'
+;
+
+--End of life SQL or Windows
+-- https://docs.microsoft.com/en-us/windows/win32/sysinfo/operating-system-version
+select windows_release,  SQLVersion=SERVERPROPERTY('ProductMajorVersion')
+from sys.dm_os_windows_info wi
+where  cast(wi.windows_release as float) < 6.2 or cast(SERVERPROPERTY('ProductMajorVersion') as float) < 11
+
+
+
+
+-- 
+;with numa  ( nodes, schdeulers) as (
+	--select nodes=count(node_id),schdeulers=sum(online_scheduler_count),cores=sum(cpu_count) from sys.dm_os_nodes where node_state_desc = 'ONLINE'
+	select nodes=count(distinct parent_node_id),schdeulers=count(scheduler_id) from sys.dm_os_schedulers where is_online = 1 and scheduler_id < 255 and parent_node_id < 64
+)
+select numa.*, [MAXDOP]=dop.value, IdealMAXDOP = 
+case 
+	when schdeulers <= 8 and nodes = 1 then 'between 1 and '+cast(schdeulers as nvarchar(3))
+	when schdeulers <= 8 and nodes > 1 then 'between 1 and '+cast(nodes as nvarchar(3))
+	when schdeulers > 8 and nodes >= 1 then 'between 1 and 8'
+	else 'unknown condidition'
+end
+from numa
+cross join sys.configurations dop where name = 'max degree of parallelism'
+
+
+
+/*
+exec sp_configure 'show advanced options', 1
+reconfigure;
+
+exec sp_configure 'max degree of parallelism', 4
+exec sp_configure 'cost threshold for parallelism', 40
+reconfigure;
+*/
+

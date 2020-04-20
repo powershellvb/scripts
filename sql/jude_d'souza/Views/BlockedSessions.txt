@@ -1,0 +1,41 @@
+-- list real time blocks
+select db_name(tl.resource_database_id) as [database]
+	,tl.request_session_id as [waiter]  -- spid of waiter - join to sys.dm_exec_* DMVs as well as sys.sysprocesses 
+	,wt.blocking_session_id as [blocker] -- spid of blocker
+	,case tl.resource_type
+		when 'DATABASE' then db_name(tl.resource_database_id)
+		when 'OBJECT' then object_schema_name(tl.resource_associated_entity_id,tl.resource_database_id)+'.'+object_name(tl.resource_associated_entity_id,tl.resource_database_id) 
+		else (select object_schema_name(i.object_id,tl.resource_database_id)+'.'+object_name(i.object_id,tl.resource_database_id)+COALESCE('.'+i.name,'') from sys.partitions p inner join sys.indexes i on i.object_id = p.object_id and i.index_id = p.index_id inner join sys.allocation_units au on au.container_id = case au.type % 2 when 0 then p.partition_id else p.hobt_id end where au.container_id = tl.resource_associated_entity_id) 
+	end as [blockedObject]
+	,CASE WHEN tl.resource_type = 'KEY' THEN 'where %%lockres%% = '''+rtrim(tl.resource_description)+'''' ELSE tl.resource_description END as waitResource	
+	,wt.resource_description as lockResourceOwner
+	,tl.resource_type
+	,tl.request_mode			-- lock requested - Shared (S), Update (U), Exclusive (X), Intent Exclusive (IX)
+	,tl.request_status --	GRANT (lock granted) | CONVERT (in process) | WAIT (waiting)
+	,tl.request_reference_count as requestCount
+	,tl.request_owner_type -- TRANSACTION | CURSOR | SESSION | SHARED_TRANSACTION_WORKSPACE | EXCLUSIVE_TRANSACTION_WORKSPACE
+	,tl.request_owner_id as [requestTransactionID] -- the transaction_id for the associated transaction when request_owner_type is TRANSACTION
+	,wt.wait_duration_ms as [waitTimeMS]	
+	,wt.wait_type 	
+	,waitersql.waiterInputBuffer, waitersql.waiterStmt --, waitersql.waiterText	
+	,blockersql.blockerInputBuffer, blockersql.blockerStmt -- , blockersql.blockerText	
+	--,tl.resource_associated_entity_id as [blkObjectid]
+	--,wt.blocking_exec_context_id
+from sys.dm_tran_locks as tl
+inner join sys.dm_os_waiting_tasks as wt on wt.resource_address = tl.lock_owner_address
+outer apply (select waiterInputBuffer=event_info, waiterStmt=substring(qt.text,r.statement_start_offset/2, 
+			(case when r.statement_end_offset = -1 
+			then len(convert(nvarchar(max), qt.text)) * 2 
+			else r.statement_end_offset end - r.statement_start_offset)/2) --, waiterText=qt.text
+		from sys.dm_exec_requests as r
+		cross apply sys.dm_exec_sql_text(r.sql_handle) as qt
+		OUTER APPLY sys.dm_exec_input_buffer(tl.request_session_id, r.request_id) ib -- 2014 SP2
+		where r.session_id = tl.request_session_id) as waitersql
+outer apply (select blockerInputBuffer=event_info, blockerStmt=substring(qt.text,r.statement_start_offset/2, 
+			(case when r.statement_end_offset = -1 
+			then len(convert(nvarchar(max), qt.text)) * 2 
+			else r.statement_end_offset end - r.statement_start_offset)/2) --, blockerText=qt.text
+		from sys.dm_exec_requests as r
+		cross apply sys.dm_exec_sql_text(r.sql_handle) as qt
+		OUTER APPLY sys.dm_exec_input_buffer(wt.blocking_session_id, r.request_id) ib -- 2014 SP2
+		where r.session_id = wt.blocking_session_id) as blockersql

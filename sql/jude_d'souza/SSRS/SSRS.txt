@@ -1,0 +1,16 @@
+-- https://blogs.technet.microsoft.com/dbtechresource/2015/04/04/retrieve-ssrs-report-server-database-information/
+-- https://www.mssqltips.com/sqlservertip/2742/sql-server-reporting-services-2008-r2-report-server-database-helpful-queries/
+
+-- upgrade history
+select * FROM ReportServer.dbo.ServerUpgradeHistory
+select top 1 * FROM ReportServer.dbo.DBUpgradeHistory order by 1 desc
+
+-- configuration information
+Select Name,Value from ReportServer.dbo.ConfigurationInfo
+
+-- WFE client servers
+Select MachineName,InstallationID,InstanceName,Client,PublicKey,SymmetricKey from ReportServer.dbo.Keys
+Where MachineName IS NOT NULL
+order by 1
+
+-- https://et4lmgmt.det.nsw.edu.au/Reports/Pages/Folder.aspx 

@@ -1,0 +1,23 @@
+-- https://docs.microsoft.com/en-us/sql/analysis-services/instances/use-dynamic-management-views-dmvs-to-monitor-analysis-services?view=sql-server-2017
+
+Select * from $System.discover_object_activity;
+--This query reports on object activity since the service last started.
+
+Select * from $System.discover_object_memory_usage;
+--This query reports on memory consumption by object.
+
+Select * from $System.discover_connections;
+--This query reports on active sessions, including session user and duration.
+
+Select * from $System.discover_sessions order by SESSION_CPU_TIME_MS desc;
+--This query reports on active sessions, including session user and duration.
+
+Select * from $System.DISCOVER_COMMANDS order by COMMAND_CPU_TIME_MS desc;
+--This query reports on active sessions, including session user and duration.
+
+Select * from $System.discover_locks;
+--This query returns a snapshot of the locks used at a specific point in time.
+
+Select * from $System.discover_traces;
+--This query returns a snapshot of the locks used at a specific point in time.
+

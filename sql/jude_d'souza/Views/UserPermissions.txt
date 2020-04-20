@@ -1,0 +1,134 @@
+-- query database-level permissions for user(s)
+SELECT 	 --distinct 
+	DB=@@servername+'.'+db_name(),
+	login = suser_sname(coalesce(usr.sid,prin.sid)), MappedLogin=sp.name
+	,grantee = case when mem.member_principal_id is not null then USER_NAME(perm.grantee_principal_id) + '('+USER_NAME(mem.member_principal_id)+')' else USER_NAME(perm.grantee_principal_id) end
+	,case when usr.type_desc is not null then prin.type_desc + '('+usr.type_desc+')' else prin.type_desc end as grantee_type
+	,perm.state_desc,perm.permission_name,perm.class_desc --, Class
+	,Object = CASE				-- Object details
+		WHEN class_desc='DATABASE' THEN DB_NAME()
+		WHEN class_desc='SCHEMA' THEN SCHEMA_NAME(major_id)
+		WHEN class_desc='OBJECT_OR_COLUMN' THEN schema_name(obj.schema_id)+'.'+OBJECT_NAME(major_id)
+		WHEN class_desc='DATABASE_PRINCIPAL' THEN USER_NAME(major_id)
+		WHEN class_desc='TYPE' THEN TYPE_NAME(major_id)
+		ELSE 'Huh??'
+	END
+	,objType = ISNULL(obj.type,'')
+	--,Objects = Count(*)  -- comment out Object and uncomment GROUP BY
+FROM sys.database_permissions perm
+left join sys.database_principals prin on prin.principal_id = perm.grantee_principal_id -- a user or role
+left join (sys.database_role_members mem -- get user members of the 'prin' role
+		inner join sys.database_principals usr on usr.principal_id = mem.member_principal_id)  
+	on mem.role_principal_id = perm.grantee_principal_id
+left join master.sys.server_principals sp on sp.sid = usr.sid and sp.type_desc like 'WINDOWS_%' -- look for AD accounts/groups
+left join sys.objects obj ON obj.object_id = perm.major_id -- objects user or role has permission to
+WHERE  perm.class_desc IN ('OBJECT_OR_COLUMN', 'SCHEMA', 'DATABASE_PRINCIPAL', 'TYPE', 'DATABASE')
+	--and perm.permission_name = 'SELECT' --in ('EXECUTE','SELECT','INSERT','UPDATE','DELETE','VIEWDEFINITION','SHOWPLAN','CONNECT')
+	--and USER_NAME(perm.grantee_principal_id) like 'SP%'
+	--and (perm.grantee_principal_id = DATABASE_PRINCIPAL_ID('JP_data_reader') ) --or perm.grantee_principal_id = DATABASE_PRINCIPAL_ID('WebUser'))-- a specific role or user
+	--and	suser_sname(coalesce(usr.sid,prin.sid)) like 'eFlow'
+	--and	sp.name like 'eFlowUAT' -- login name
+	--and usr.Type in ('S','U','G') -- SQL user, Windows user, Windows group
+	--and not perm.state_desc = 'DENY'
+	--and OBJECT_NAME(perm.major_id) in ('tblPipeline','tblPipelineStatus')
+--GROUP BY --@@servername+'.'+db_name(),
+--	case when mem.member_principal_id is not null then USER_NAME(grantee_principal_id) + '('+USER_NAME(mem.member_principal_id)+')' else USER_NAME(grantee_principal_id) end,
+--	suser_sname(coalesce(usr.sid,prin.sid))
+--	,case when usr.type_desc is not null then prin.type_desc + '('+usr.type_desc+')' else prin.type_desc end 
+--	,Permission_Name, Class_Desc
+--	,ISNULL(obj.type,'')
+order by 2,3, Object;
+
+-- Database role mappings
+select [Role]=rol.name,DBUsr=usr.name --,LoginUsr=suser_sname(usr.sid)
+from sys.database_role_members rm 
+inner join sys.database_principals rol  ON rol.principal_id = rm.role_principal_id and rol.Type = 'R'
+left join sys.database_principals usr on usr.principal_id = rm.member_principal_id and usr.Type != 'R'
+--where rol.name = 'db_owner' and 
+--suser_sname(usr.sid) = 'srvPTTDBInst_S'
+order by 1
+
+--guest permission
+-- https://blogs.msdn.microsoft.com/batuhanyildiz/2013/03/02/guest-user-account-in-sql-server/
+SELECT db_name(), dpr.name, dpr.type, dpe.permission_name, dpe.state_desc
+FROM sys.database_principals dpr
+INNER JOIN sys.database_permissions dpe
+ON dpr.principal_id = dpe.grantee_principal_id
+WHERE dpr.name = 'guest' and dpr.type = 'S' AND dpe.permission_name = 'CONNECT'
+
+--use [<DB>]
+--go
+--REVOKE CONNECT FROM guest
+--go
+
+-- ALTER ROLE db_ddladmin ADD member ceseeltadmin
+
+-- Server role membership
+SELECT 
+	login.name AS Login -- login.member_principal_id, 
+	,login.type_desc AS Type
+	,role.name AS RoleName --role.principal_id,
+	,sp.class_desc,sp.permission_name,sp.type,sp.state_desc
+FROM sys.server_principals AS login 
+left join sys.server_role_members rm ON rm.member_principal_id = login.principal_id
+left JOIN sys.server_principals AS role ON  role.principal_id = rm.role_principal_id and role.type = 'R' --and role.is_fixed_role = 0  
+LEFT JOIN sys.server_permissions sp on sp.grantee_principal_id = ISNULL(login.principal_id, role.principal_id)
+WHERE  role.name = 'sysadmin'
+--	login.type != 'R' and login.name = 'srvQTTDBInst_S';
+
+GO
+
+-- Server permissions
+SELECT l.name as grantee, l.type_desc, p.permission_name, p.state_desc, l.is_disabled
+FROM sys.server_permissions AS p 
+INNER JOIN sys.server_principals AS l ON p.grantee_principal_id = l.principal_id
+WHERE p.type = 'VWSS' 
+
+-- to public role
+SELECT dpr.name, dpr.type_desc, dpe.permission_name, dpe.state_desc
+FROM sys.server_principals dpr
+INNER JOIN sys.server_permissions dpe ON dpr.principal_id = dpe.grantee_principal_id
+WHERE dpr.name = 'public' and dpr.type = 'R' and dpr.is_disabled = 0 AND dpe.type = 'VWDB' and dpe.state = 'G'
+
+-- logins are unable to see any databases in SSMS unless member of sysadmin or the login is the owner of a database(s).
+USE MASTER
+GO
+DENY VIEW ANY DATABASE TO PUBLIC
+GO
+
+--To grant the VIEW ANY DATABASE permission to a specific login.
+GRANT VIEW ANY DATABASE TO [login_name]; 
+GO
+
+SELECT * FROM sys.fn_builtin_permissions('SERVER') ORDER BY permission_name;  
+
+
+use [master]
+GO
+--GRANT ALTER ANY AVAILABILITY GROUP TO [NT AUTHORITY\SYSTEM] 
+
+-- ALTER SERVER ROLE [sysadmin] ADD MEMBER [srvQTTDBInst_S]
+
+--GRANT VIEW SERVER STATE TO [<Login>]
+--REVOKE VIEW SERVER STATE TO [<Login>] 
+
+
+--EXEC xp_logininfo 'DETNSW\AD_Service_Intelligence', 'members'
+
+--Grant view database state to [DETNSW\AD_Service_Intelligence]
+
+
+create table #logininfo (
+	[account name] sysname,	--Fully qualified Windows account name.
+	[type]	char(8),	--Type of Windows account. Valid values are user or group.
+	privilege	char(9),	--Access privilege for SQL Server. Valid values are admin, user, or null.
+	[mapped login name]	sysname,	--For user accounts that have user privilege, mapped login name shows the mapped login name that SQL Server tries to use when logging in with this account by using the mapped rules with the domain name added before it.
+	[permission path]	sysname, -- Group membership that allowed the account access.
+)
+
+select 'insert into #logininfo'+CHAR(10)+'EXEC xp_logininfo '''+name+''', ''members''',*
+from sys.server_principals where type = 'G'
+
+--truncate table #logininfo
+select * from #logininfo where [mapped login name] like 'UATDETNSW\SAsrathugama'
+drop table #logininfo

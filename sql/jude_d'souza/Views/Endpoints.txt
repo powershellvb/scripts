@@ -1,0 +1,22 @@
+--	All endpoints and all generic properties
+select * from sys.endpoints
+
+select * from sys.tcp_endpoints	--All TCP endpoints and properties
+ -- The Database Mirroring endpoints
+select * from sys.service_broker_endpoints	--The Service Broker endpoints
+select * from sys.via_endpoints	--All VIA endpoints and properties
+select * from sys.soap_endpoints	--HTTP endpoints that carry a SOAP-type payload
+select * from sys.endpoint_webmethods	--SOAP methods defined on endpoints
+select * from sys.http_endpoints	--All http endpoints and HTTP properties
+
+select * from sys.dm_hadr_cluster_networks
+select * from sys.dm_tcp_listener_states
+select * from sys.availability_group_listeners
+
+select sp.state_desc, *
+from sys.database_mirroring_endpoints dme 
+LEFT join sys.server_permissions sp on dme.endpoint_id = SP.major_id AND SP.class_desc = 'endpoint'
+LEFT JOIN sys.server_principals pri on pri.principal_id = sp.grantee_principal_id
+WHERE dme.type_desc = 'DATABASE_MIRRORING'
+
+--GRANT Connect on EndPoint::[mirroring] To [DEVDETNSW\srvSQLServer]

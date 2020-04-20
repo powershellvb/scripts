@@ -1,0 +1,138 @@
+-- Stored procedure Cached plans
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT --TOP 100
+DBName=@@servername+'.'+CASE WHEN ps.database_id = 32767 then 'Resource' ELSE DB_NAME(database_id)END 
+,[object]=object_schema_name(ps.object_id,ps.database_id)+'.'+OBJECT_NAME(ps.object_id,ps.database_id) , ps.type
+,ps.cached_time
+,ps.last_execution_time
+,ps.execution_count
+,AVG_CPU=ps.total_worker_time / ps.execution_count
+,AVG_RESOURCE=(ps.total_elapsed_time-ps.total_worker_time) / ps.execution_count
+,AVG_ELAPSED=ps.total_elapsed_time / ps.execution_count
+,AVG_LOGICAL_READS=ps.total_logical_reads / ps.execution_count
+,AVG_LOGICAL_WRITES=ps.total_logical_writes / ps.execution_count
+,AVG_PHYSICAL_READS=ps.total_physical_reads  / ps.execution_count
+,ps.total_worker_time
+,total_resource_time=ps.total_elapsed_time-ps.total_worker_time
+,ps.total_elapsed_time
+,ps.total_logical_reads
+,ps.total_logical_writes
+,ps.total_physical_reads
+--,ps.total_spills,ps.last_spills --2016 SP2
+--,qs.query_hash,query_plan_hash,qs.plan_generation_num
+--,query_text=SUBSTRING(q.text,qs.statement_start_offset/2, (case when qs.statement_end_offset = -1 then len(convert(nvarchar(max), q.text)) * 2 else qs.statement_end_offset end - qs.statement_start_offset)/2)
+,p.query_plan
+,ps.plan_handle
+FROM sys.dm_exec_procedure_stats ps
+CROSS APPLY sys.dm_exec_query_plan(ps.plan_handle) p
+CROSS APPLY sys.dm_exec_sql_text(ps.sql_handle) as q
+--inner join sys.dm_exec_query_stats qs on qs.sql_handle = ps.sql_handle
+WHERE ps.database_id = db_id()
+and ps.object_id = object_id('dbo.spGetProviderNotification')
+OPTION (MAXDOP 1)
+
+
+
+
+-- All cached plans for current DB
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED 
+SELECT top 10 DBName=@@servername+'.'+db_name(sqlplan.dbid), [object]=object_schema_name(sqlplan.objectid,sqlplan.dbid)+'.'+object_name(sqlplan.objectid,sqlplan.dbid)
+	,qs.total_worker_time/qs.execution_count as avg_worker_time
+	,cp.*, qs.last_execution_time, sqlplan.query_plan, sqltext.text
+FROM sys.dm_exec_cached_plans AS cp 
+CROSS APPLY sys.dm_exec_query_plan(cp.plan_handle) sqlplan
+CROSS APPLY sys.dm_exec_sql_text(cp.plan_handle) sqltext
+left join sys.dm_exec_query_stats qs on qs.plan_handle = cp.plan_handle
+where sqlplan.dbid=db_id() 
+	-- Enable the relevant where clause
+--	and cacheobjtype='Compiled Plan' 
+--	and	sqlplan.query_plan.value('declare namespace p="http://schemas.microsoft.com/sqlserver/2004/07/showplan";max(//p:RelOp/@Parallel)', 'float') > 0
+	
+	and objtype='Proc' -- Stored Procs, Multi-statement TVFs, Scalar UDFs
+	and sqlplan.objectid = object_id('dbo.spGetProviderNotification')	
+
+--	and cacheobjtype='Compiled Plan' and objtype='Prepared' --and sqlplan.objectid=object_id('sp_executesql','P') -- adhoc queries
+--	and sqltext.text like '(@P0 nvarchar(4000),@P1 varbinary(8000))SELECT o.l3_uuid, o.l3_timeEntered FROM l3_UserPrivilegeOperation o WHERE  (o.l3_uuid = @P0 ) AND (o.l3_corpId =  @P1 )   ORDER BY o.l3_timeEntered ASC'
+
+	--and cacheobjtype='Parse Tree' and objtype='View' 	-- Views, Inline TVFs
+	--and sqlplan.objectid = object_id('dbo.???')
+
+--	and sqltext.text like '(@P0 nvarchar(4000),@P1 varbinary(8000))SELECT o.l3_uuid, o.l3_timeEntered FROM l3_UserPrivilegeOperation o WHERE  (o.l3_uuid = @P0 ) AND (o.l3_corpId =  @P1 )   ORDER BY o.l3_timeEntered ASC'
+ORDER BY qs.total_worker_time/qs.execution_count DESC
+OPTION (MAXDOP 1)
+
+
+
+-- Look for serial / parallel plans in stored procs
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+;WITH XMLNAMESPACES(DEFAULT N'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+,cfg AS (SELECT CTP=CONVERT(FLOAT, value_in_use) FROM sys.configurations WHERE name = 'cost threshold for parallelism')
+SELECT * FROM (  
+	select 
+	DB=db_name(ps.database_id), Process=object_schema_name(ps.object_id,ps.database_id)+'.'+object_name(ps.object_id,ps.database_id),
+	StatementText		= n.value('(@StatementText)[1]', 'VARCHAR(8000)'), 
+	IsParallel		= n.value('max(//RelOp/@Parallel)', 'float'), 
+	StatementSubTreeCost= cast(isnull(n.value('(@StatementSubTreeCost)[1]', 'VARCHAR(128)'),'0') as float),-- The parallel cost; The serial plan’s cost would be more than this 
+	cfg.CTP,
+	ParallelSubTreeXML	= n.query('.'),  
+	CompleteQueryPlan	= qp.query_plan
+	,ps.*, qt.text
+	,RankPerText = ROW_NUMBER() OVER (PARTITION BY n.value('(@StatementText)[1]', 'VARCHAR(8000)') ORDER BY ps.execution_count DESC)
+from sys.dm_exec_procedure_stats ps
+cross apply cfg
+cross apply sys.dm_exec_sql_text(ps.sql_handle) as qt
+cross APPLY sys.dm_exec_query_plan(ps.plan_handle) as qp
+CROSS APPLY qp.query_plan.nodes('/ShowPlanXML/BatchSequence/Batch/Statements/StmtSimple') AS qn(n)
+WHERE n.query('.').exist('//RelOp[@PhysicalOp="Parallelism"]') = 0 --< EDIT 0: serial, 1: parallel
+	and isnumeric(n.value('(@StatementSubTreeCost)[1]', 'VARCHAR(128)')) = 1
+	and ps.database_id not in (1,2,3,4,5,32767)
+) AS Q
+WHERE RankPerText = 1 -- This would filter out duplicate statements, returning only those with the highest usecount
+and StatementSubTreeCost BETWEEN  20 and q.CTP -- Set the maximum sub-tree cost, plans with higher cost than this wouldn't normally interest us
+--AND	execution_count > 50	-- Set minimum usecount to ignore rarely-used plans
+ORDER BY execution_count DESC
+OPTION(MAXDOP 1)
+
+
+
+-- Look for serial / parallel plans in any query
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+;WITH XMLNAMESPACES(DEFAULT N'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+,cfg AS (SELECT CTP=CONVERT(FLOAT, value_in_use) FROM sys.configurations WHERE name = 'cost threshold for parallelism')
+SELECT * FROM (  
+	select 
+	DB=db_name(qp.dbid),
+	StatementText		= n.value('(@StatementText)[1]', 'VARCHAR(4000)'), 
+	StatementSubTreeCost= cast(isnull(n.value('(@StatementSubTreeCost)[1]', 'VARCHAR(128)'),'0') as float),-- The parallel cost; The serial plan’s cost would be more than this 
+	cfg.CTP,
+	--ParallelSubTreeXML	= n.query('.'),  
+	CompleteQueryPlan	= qp.query_plan
+	,qs.creation_time,qs.last_execution_time,qs.execution_count,cp.usecounts,avgExecTime=total_elapsed_time/cp.usecounts/1000, avgCPUTime=total_worker_time/cp.usecounts/1000, [CPUtime%]=total_worker_time*100/total_elapsed_time
+	,cp.size_in_bytes,cp.objtype, qt.text, qs.query_hash, qs.query_plan_hash
+	,RankPerText = ROW_NUMBER() OVER (PARTITION BY qs.query_hash ORDER BY qs.execution_count DESC)
+	--,RankPerText = ROW_NUMBER() OVER (PARTITION BY n.value('(@StatementText)[1]', 'VARCHAR(4000)') ORDER BY qs.execution_count DESC)
+from sys.dm_exec_cached_plans cp
+inner join sys.dm_exec_query_stats qs on qs.plan_handle = cp.plan_handle
+cross apply cfg
+cross apply sys.dm_exec_sql_text(cp.plan_handle) as qt
+cross APPLY sys.dm_exec_query_plan(cp.plan_handle) as qp
+CROSS APPLY qp.query_plan.nodes('/ShowPlanXML/BatchSequence/Batch/Statements/StmtSimple') AS qn(n)
+WHERE n.query('.').exist('//RelOp[@PhysicalOp="Parallelism"]') = 0 --< EDIT 0: serial, 1: parallel
+	and isnumeric(n.value('(@StatementSubTreeCost)[1]', 'VARCHAR(128)')) = 1
+	and qp.dbid not in (1,2,3,4,5,32767)
+) AS Q
+WHERE RankPerText = 1 -- This would filter out duplicate statements, returning only those with the highest usecount
+--and StatementSubTreeCost > BETWEEN 20 and q.CTP -- Set the maximum sub-tree cost, plans with higher cost than this wouldn't normally interest us
+--AND	execution_count > 50	-- Set minimum usecount to ignore rarely-used plans
+ORDER BY StatementSubTreeCost DESC
+OPTION(MAXDOP 1)
+
+
+/*
+exec sp_configure 'show advanced options', 1
+reconfigure;
+
+exec sp_configure 'max degree of parallelism', 4
+exec sp_configure 'cost threshold for parallelism', 41
+reconfigure;
+*/

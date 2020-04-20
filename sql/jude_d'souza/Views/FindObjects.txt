@@ -1,0 +1,24 @@
+DECLARE @sql NVARCHAR(MAX) = N'', 
+  @p NVARCHAR(MAX), 
+  @linked_server SYSNAME = N'%HPVBAUSQL009_OMMGDC1_OPERATIONSMANAGER%';
+
+SET @p = N' UNION ALL SELECT N''$db$'' as [Database], o.type, s.name+''.''+o.name as Object
+FROM $db$.sys.sql_modules AS p
+INNER JOIN $db$.sys.objects AS o ON p.[object_id] = o.[object_id]
+INNER JOIN $db$.sys.schemas AS s ON o.[schema_id] = s.[schema_id]
+WHERE p.definition LIKE @lsn';
+
+SELECT @sql = @sql + REPLACE(@p, N'$db$', QUOTENAME(name))
+-- select database_id,name,collation_name
+FROM sys.databases -- may want to filter out system dbs, offline, etc
+where database_id in (9,10)
+
+SET @sql = STUFF(@sql, 1, 11, N'') + N';';
+
+print @sql
+
+EXEC sys.sp_executesql @sql, N'@lsn SYSNAME', @linked_server;
+
+SELECT j.name FROM msdb.dbo.sysjobs AS j
+INNER JOIN msdb.dbo.sysjobsteps AS s ON j.job_id = s.job_id
+WHERE s.command LIKE @linked_server;

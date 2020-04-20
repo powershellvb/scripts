@@ -1,0 +1,40 @@
+
+--https://www.mssqltips.com/sqlservertip/3209/understanding-sql-server-log-sequence-numbers-for-backups/
+--Query 1. Backup history listing
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+select DB=db.name,Recovery=db.recovery_model_desc,bs.server_name,[Type]=case bs.type when 'D' then 'Full' when 'I' then 'Diff' when 'L' then 'Log' else bs.type end
+,IsCopy=bs.is_copy_only,bs.backup_start_date,bs.backup_finish_date, TimeMinutes = datediff(minute,bs.backup_start_date,bs.backup_finish_date)
+,mf.physical_device_name,Device=case mf.device_type when 2 then 'Disk' when 5 then 'Tape' when 7 then 'Virtual device' when 9 then 'Azure Storage' when 105 then 'A permanent backup device' end,bs.user_name
+,bs.backup_size,bs.compressed_backup_size
+,bs.checkpoint_lsn,bs.database_backup_lsn,bs.first_lsn,bs.last_lsn,bs.differential_base_lsn,bs.media_set_id--,mf.family_sequence_number
+from sys.databases db
+left join msdb.dbo.backupset bs on db.name = bs.database_name and bs.server_name = @@SERVERNAME and bs.type = 'D' and bs.backup_start_date > dateadd(day,-14, getdate()) and bs.is_copy_only = 0 
+left join msdb.dbo.backupmediafamily mf on bs.media_set_id = mf.media_set_id
+where db.database_id > 5
+order by bs.media_set_id,mf.family_sequence_number
+GO
+
+
+--Query 2. Missing Diff backups
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+;with lastDBBackup AS
+(
+select db.name,dbs.backup_start_date,dbs.checkpoint_lsn,dbs.media_set_id,incrementals=count(ibs.differential_base_lsn), FirstIncremental=min(ibs.backup_start_date), LastIncremental=max(ibs.backup_start_date)
+,row = ROW_NUMBER() OVER(PARTITION BY db.name ORDER BY dbs.backup_start_date desc)
+,[Days]=(datediff(day,dbs.backup_start_date, max(isnull(ibs.backup_start_date,getdate())))-2)
+from sys.databases db
+left join msdb.dbo.backupset dbs  on db.name = dbs.database_name and dbs.server_name = @@SERVERNAME and dbs.is_copy_only = 0 and dbs.type = 'D' and dbs.backup_start_date > dateadd(day, -7,getdate())
+left join msdb.dbo.backupset ibs on ibs.database_name = dbs.database_name and ibs.type = 'I' and ibs.differential_base_lsn = dbs.checkpoint_lsn --and ibs.backup_start_date > dbs.backup_start_date
+where db.database_id > 5 
+--and dbs.server_name not like 'qw%'
+--and dbs.database_name = 'Content_Word_Automation_ServiceApp'
+group by db.name,dbs.backup_start_date,dbs.checkpoint_lsn,dbs.media_set_id
+having dbs.backup_start_date IS NULL -- No Full backup
+	or count(ibs.differential_base_lsn) <= (datediff(day,dbs.backup_start_date, max(isnull(ibs.backup_start_date,getdate())))-2) -- number of incrementals is > days between the Db backup and last Incremental less 2 (Sat,Sun)
+)
+select name,mf.physical_device_name,backup_start_date,incrementals, FirstIncremental, LastIncremental, [Days]
+from lastDBBackup
+left join msdb.dbo.backupmediafamily mf on lastDBBackup.media_set_id = mf.media_set_id
+where lastDBBackup.row = 1
+order by name,backup_start_date
+GO

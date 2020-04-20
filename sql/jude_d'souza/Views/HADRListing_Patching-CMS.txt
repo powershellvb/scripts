@@ -1,0 +1,80 @@
+create table #aagDtl (
+	AGname	sysname
+	,replica_server_name	nvarchar(512)
+	,role_desc	nvarchar(120)
+	,availability_mode_desc	nvarchar(120)
+	,availability_mode tinyint
+	,failover_mode tinyint
+	,failover_mode_desc	nvarchar(120)
+)
+declare @cmd varchar(1024) = 
+'
+SELECT ag.name,ar.replica_server_name,ars.role_desc,ar.availability_mode_desc, ar.availability_mode, ar.failover_mode, ar.failover_mode_desc
+FROM sys.availability_groups ag 
+INNER JOIN sys.availability_replicas ar ON ag.group_id = ar.group_id
+INNER JOIN sys.dm_hadr_availability_replica_states ars ON ar.group_id = ars.group_id AND ar.replica_id = ars.replica_id 
+inner join (
+	select ar.group_id
+	from sys.availability_replicas ar
+	--INNER JOIN sys.dm_hadr_availability_group_states ags ON ags.group_id = ar.group_id
+	INNER JOIN sys.dm_hadr_availability_replica_states ars ON ar.group_id = ars.group_id AND ar.replica_id = ars.replica_id 
+    where ar.replica_server_name = @@servername and ars.is_local = 1 and ars.role < 2 -- Resolving or Primary
+	) as Pri (group_id) on Pri.group_id = ar.group_id
+WHERE (ar.availability_mode ^ ar.failover_mode) = 0
+ORDER BY ag.name, ars.role_desc
+'
+if isnull(SERVERPROPERTY ('IsHadrEnabled'),0) = 1
+insert into #aagDtl exec (@cmd)
+select * from #aagDtl
+drop table #aagDtl
+go
+
+
+
+
+-- script to get AG information
+-- change the having clause to isolate certain types of clusters
+-- set the having clause equal to 2 to isolate 2 node clusters
+-- set the having clause equal to 3 to isolate 3 node clusters
+-- set the having clause less than 4 to get all clusters
+-- uncomment where clause as needed
+
+
+create table #aagDtl (
+              replica_server_name     nvarchar(512)
+              ,name   sysname
+              ,role_desc          nvarchar(120)
+              ,availability_mode_desc nvarchar(120)
+              ,availability_mode tinyint
+              ,failover_mode tinyint
+              ,failover_mode_desc     nvarchar(120)
+)
+declare @cmd varchar(max) = 
+'insert into #aagDtl
+SELECT ar.replica_server_name,ag.name,ars.role_desc,ar.availability_mode_desc, ar.availability_mode, ar.failover_mode, ar.failover_mode_desc
+FROM sys.availability_groups ag 
+INNER JOIN sys.availability_replicas ar ON ag.group_id = ar.group_id
+inner join (
+              select ag.group_id
+              from sys.availability_groups ag
+              inner join sys.availability_replicas ar on ag.group_id = ar.group_id
+              group by ag.group_id
+              having count(*) < 4
+			) as cnt on cnt.group_id = ag.group_id
+INNER JOIN sys.dm_hadr_availability_replica_states ars ON ar.group_id = ars.group_id AND ar.replica_id = ars.replica_id 
+inner join (
+              select ar.group_id
+              from sys.availability_replicas ar
+              INNER JOIN sys.dm_hadr_availability_replica_states ars ON ar.group_id = ars.group_id AND ar.replica_id = ars.replica_id 
+              where ar.replica_server_name = @@servername and 
+              ars.is_local = 1 and ars.role < 2 -- Resolving or Primary
+              ) as Pri on Pri.group_id = ag.group_id
+WHERE ars.role_desc = ''PRIMARY''
+	AND (ar.availability_mode ^ ar.failover_mode) = 0
+ORDER BY ag.name, ars.role_desc
+'
+if cast (serverproperty('ProductMajorVersion') as int) >= 11
+insert into #aagDtl exec (@cmd)
+select * from #aagDtl
+drop table #aagDtl
+go

@@ -1,0 +1,25 @@
+SELECT
+    constraint_name=f.name
+   ,OBJECT_SCHEMA_NAME(f.parent_object_id)+'.'+OBJECT_NAME(f.parent_object_id) referencing_table_name
+   ,COL_NAME(fc.parent_object_id, fc.parent_column_id) referencing_column_name,CCI=fc.constraint_column_id
+   ,COL_NAME(fc.referenced_object_id, fc.referenced_column_id) referenced_column_name
+   ,OBJECT_SCHEMA_NAME (f.referenced_object_id)+'.'+OBJECT_NAME (f.referenced_object_id) referenced_table_name
+   ,is_disabled,is_not_trusted,isNotForRepl=is_not_for_replication
+   ,DRA=delete_referential_action_desc
+   ,URA=update_referential_action_desc
+   ,indexName=ind.name,ind.type_desc,PK=ind.PK,ind.UK,ind.indexcols
+FROM sys.foreign_keys f
+INNER JOIN sys.foreign_key_columns fc ON f.object_id = fc.constraint_object_id
+outer apply (
+	select i.name,i.type_desc,PK=i.is_primary_key,UK=(i.is_unique|i.is_unique_constraint)
+	,indexcols = stuff((select ', '+C.NAME from sys.index_columns IC join sys.columns C on C.OBJECT_ID = IC.OBJECT_ID and C.COLUMN_ID = IC.COLUMN_ID and IC.is_included_column = 0
+							where IC.OBJECT_ID = I.OBJECT_ID AND IC.INDEX_ID = I.INDEX_ID order by IC.KEY_ORDINAL for XML PATH ('')),1,2,'')
+	from sys.indexes i
+	inner join sys.index_columns ic on IC.OBJECT_ID = I.OBJECT_ID AND IC.INDEX_ID = I.INDEX_ID and IC.is_included_column = 0 
+	where i.object_id = f.parent_object_id and i.index_id > 0 and ic.column_id = fc.parent_column_id and ic.key_ordinal = fc.constraint_column_id
+) ind 
+where f.delete_referential_action = 1 --and --CASCADE
+	--(f.referenced_object_id = object_id('dbo.tblSESSION') --referenced table
+	--or	f.parent_object_id = object_id('dbo.tblSEC_MODACT')) -- referencing table
+--f.name  = 'FK_tblSEC_MODACT_tblSESSION'
+ORDER BY f.name, fc.constraint_column_id

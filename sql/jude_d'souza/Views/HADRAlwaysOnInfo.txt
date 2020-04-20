@@ -1,0 +1,47 @@
+SELECT 
+	ag_name=ag.name, 
+	adc.database_name, 
+	drs.is_primary_replica, 
+	replica_server=ar.replica_server_name, ar.endpoint_url, rcs.join_state_desc,
+	drs.is_local, 
+	ars.role_desc, ars.operational_state_desc, ars.recovery_health_desc, ars.synchronization_health_desc, ars.connected_state_desc,ars.last_connect_error_description,
+	drs.is_commit_participant, -- 1 = Transaction commit is synchronized with respect to this database. always 0, for a database on an asynchronous-commit availability replica.
+	drs.database_state_desc,
+	synchealth=drs.synchronization_health_desc, 
+	syncstate=drs.synchronization_state_desc, 
+	is_suspended=IIF(drs.is_suspended=1, drs.suspend_reason_desc, 'NO'),
+	drs.log_send_queue_size, -- Amount of log records of the primary database that has not been sent to the secondary databases, in kilobytes (KB).
+	drs.log_send_rate, 
+	drs.redo_queue_size, -- Amount of log records in the log files of the secondary replica that has not yet been redone (replayed), in kilobytes (KB).
+	drs.redo_rate,
+	last_sent_block=substring(right(drs.last_sent_lsn,15),1,10), --Log block ID that indicates the point up to which all log blocks have been sent by the primary. This is the ID of the next log block that will be sent, rather than the ID of the most recently sent log block.
+	drs.last_sent_time, 
+	last_received_block=substring(right(drs.last_received_lsn,15),1,10), --Log block ID identifying the point up to which all log blocks have been received by the secondary replica that hosts this secondary database.
+	drs.last_received_time, 
+	last_hardened_block=substring(right(drs.last_hardened_lsn,15),1,10), -- any LSN < the value of last_hardened_lsn is on disk	on a secondary database. LSN that are >= to this value are not flushed    
+	drs.last_hardened_time, secondary_lag_seconds=datediff(ss,drs.last_hardened_time,getdate()),
+	--drs.secondary_lag_seconds -- SQL 2016+
+	drs.last_redone_lsn, --Actual LSN of the last log record that was redone on the secondary database. last_redone_lsn is always less than last_hardened_lsn.
+	drs.last_redone_time, 
+	redo_lag=cast (substring(right(drs.last_received_lsn,15),1,10) as int) - cast (substring(right(drs.last_redone_lsn,15),1,10) as int),
+	drs.last_commit_lsn, --For the primary db, this is last commit record processed. Rows for secondary dbs show the LSN that the secondary replica has sent to the primary replica. On the secondary replica, this is the last commit record that was redone.
+	drs.last_commit_time,
+	end_of_log_block=substring(right(drs.end_of_log_lsn,15),1,10), --log-block ID corresponding to the last log record in the log cache on the primary and secondary databases.  On the primary replica, the secondary rows reflect the end of log LSN from the latest progress messages that the secondary replicas have sent to the primary replica.
+	recovery_block=substring(right(drs.recovery_lsn,15),1,10), --On the primary replica, the end of the transaction log before the primary database writes any new log records after recovery or failover. For a given secondary database, if this value is less than the current hardened LSN (last_hardened_lsn), recovery_lsn is the value to which this secondary database would need to resynchronize (that is, to revert to and reinitialize to). If this value is greater than or equal to the current hardened LSN, resynchronization would be unnecessary and would not occur.
+	truncation_block=substring(right(drs.truncation_lsn,15),1,10), -- On the primary replica, for the primary database, reflects the minimum log truncation LSN across all the corresponding secondary databases. If local log truncation is blocked (eg. a backup operation), this LSN might be higher than the local truncation LSN. For a given secondary database, reflects the truncation point of that database.
+	ETA=case when drs.redo_rate = 0 then null else dateadd(ss,drs.redo_queue_size / drs.redo_rate,getdate()) end
+	, ':connect '+ar.replica_server_name+CHAR(13)+CHAR(10)+'ALTER DATABASE ['+adc.database_name+'] SET HADR OFF;'+CHAR(13)+CHAR(10)+'go'+char(10)+'ALTER DATABASE ['+adc.database_name+'] SET HADR AVAILABILITY GROUP = ['+ag.name+'];'+CHAR(13)+CHAR(10)++'go'
+--	drs.filestream_send_rate
+-- select *
+FROM sys.dm_hadr_database_replica_states AS drs
+LEFT JOIN sys.dm_hadr_availability_replica_states ars ON drs.group_id = ars.group_id AND drs.replica_id = ars.replica_id
+LEFT JOIN sys.dm_hadr_availability_replica_cluster_states rcs on rcs.group_id = drs.group_id AND rcs.replica_id = drs.replica_id -- Joined state of each AAG replica in the WSFC cluster
+LEFT JOIN sys.availability_databases_cluster AS adc ON drs.group_id = adc.group_id AND drs.group_database_id = adc.group_database_id
+LEFT JOIN sys.availability_groups AS ag ON ag.group_id = drs.group_id
+LEFT JOIN sys.availability_replicas AS ar ON drs.group_id = ar.group_id AND drs.replica_id = ar.replica_id
+where ag.name = 'pw0000sqs001a5' 
+--and adc.database_name like  'PV-P1S' --and
+-- drs.synchronization_health_desc = 'NOT_HEALTHY'
+ORDER BY 1,2,3 desc,4 --ag.name, ar.replica_server_name, adc.database_name;
+go
+

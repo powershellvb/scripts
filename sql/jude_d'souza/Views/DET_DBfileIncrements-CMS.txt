@@ -1,0 +1,37 @@
+--Show increments to database files - requires SQL 2012 or later
+--DET  - execute in CMS
+;with lfc as (
+select DB=db_name(df.dbid),df.dbid,Drive=left(df.filename,1),df.filename,ftype=right(df.filename,3),dfh.datetime_captured,dfh.space_used
+,previousSize=LAG(dfh.size,1) over (partition by df.dbid,df.filename order by dfh.datetime_captured)
+,dfh.size
+from monitor.dbo.database_files df 
+inner join monitor.dbo.database_file_history dfh on df.id = dfh.database_file_id
+where dfh.datetime_captured > dateadd(week, -1, getdate())
+--and left(df.filename,1) = 'l'
+--and right(df.filename,3) = 'ldf'
+and df.dbid = 2 --= db_id('SI_Live_Incident')
+)
+select *, increase = size - isnull(previousSize,size)
+from lfc where size <> previousSize
+order by dbid	--,filename -- include filename to analyse tempdb
+	,datetime_captured
+
+
+-- for 2008R2 instances
+;with lfc as (
+select DB=db_name(df.dbid),df.dbid,Drive=left(df.filename,1),df.filename,ftype=right(df.filename,3),dfh.datetime_captured,dfh.space_used
+,rownum=row_number() over (partition by df.dbid,df.filename order by dfh.datetime_captured)
+,dfh.size
+from monitor.dbo.database_files df 
+inner join monitor.dbo.database_file_history dfh on df.id = dfh.database_file_id
+where dfh.datetime_captured > dateadd(week, -1, getdate())
+--and left(df.filename,1) = 'l'
+--and right(df.filename,3) = 'ldf'
+and df.dbid = 2 --= db_id('SI_Live_Incident')
+)
+select *, increase = lfc.size - isnull(pfc.Size,lfc.size)
+from lfc 
+left join lfc pfc on pfc.dbid=lfc.dbid and pfc.filename = lfc.filename and pfc.rownum = lfc.rownum-1
+where lfc.size <> pfc.Size
+order by lfc.dbid	--,filename -- include filename to analyse tempdb
+	,lfc.datetime_captured

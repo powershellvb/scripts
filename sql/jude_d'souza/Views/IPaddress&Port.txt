@@ -1,0 +1,6 @@
+
+select  [Server]=@@servername,
+local_net_address,
+local_tcp_port
+from sys.dm_exec_connections
+where net_transport = 'TCP' and protocol_type = 'TSQL'

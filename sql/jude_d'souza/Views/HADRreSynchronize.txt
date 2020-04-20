@@ -1,0 +1,46 @@
+-- Do the following in Classic when a Secondary replica is not synchronizing
+-- 1. Disable Log backup job on the primary
+
+-- 2. Create as share to backup folder on Primary
+
+-- 3. Execute on Primary to get Log backup command to be applied to secondary
+select mf.physical_device_name,Restore_command='RESTORE LOG ' + bs.database_name + ' FROM DISK=N''' + mf.physical_device_name + 
+	''' WITH NORECOVERY, STATS=25' 
+ , bs.* 
+From msdb.dbo.backupset bs
+join msdb.dbo.backupmediafamily mf on bs.media_set_id = mf.media_set_id
+where bs.type = 'L' 
+and bs.database_name='<database>' and bs.backup_start_date > --'2019-09-22 14:19:00.857'
+	(	SELECT top 1 dbr.last_hardened_time
+		FROM master.sys.availability_groups AS AG
+		left JOIN master.sys.availability_replicas AS AR ON AR.group_id=AG.group_id
+		left JOIN master.sys.dm_hadr_availability_group_states AS AGS ON AGS.group_id = AG.group_id
+		left JOIN master.sys.dm_hadr_database_replica_cluster_states AS dbcs ON dbcs.replica_id = AR.replica_id
+		left JOIN master.sys.dm_hadr_database_replica_states AS dbr ON dbcs.replica_id = dbr.replica_id AND dbcs.group_database_id = dbr.group_database_id
+		WHERE ags.primary_replica = @@servername and ar.replica_server_name <> @@servername and dbcs.database_name = bs.database_name and (dbcs.is_database_joined = 0 or dbr.synchronization_health = 0)
+		order by dbr.last_hardened_time asc)
+order by bs.backup_finish_date asc
+GO
+
+-- 4. EDIT DISK path and execute Restore_command on secondary replica
+
+-- 5. Execute on Secondary to join replica to AAG
+use master
+go
+ALTER DATABASE [<database>] SET HADR AVAILABILITY GROUP = [<AAG>]
+go
+
+-- 6. Enable Log backup job on the primary
+
+
+-- Script to EVICT the database from PRIMARY:
+
+SELECT ag.name, dbcs.database_name, ar.replica_server_name,
+'ALTER AVAILABILITY GROUP ['+ag.name+'] REMOVE DATABASE ['+ dbcs.database_name +'];'
+		FROM master.sys.availability_groups AS AG
+		left JOIN master.sys.availability_replicas AS AR ON AR.group_id=AG.group_id
+		left JOIN master.sys.dm_hadr_availability_group_states AS AGS ON AGS.group_id = AG.group_id
+		left JOIN master.sys.dm_hadr_database_replica_cluster_states AS dbcs ON dbcs.replica_id = AR.replica_id
+		left JOIN master.sys.dm_hadr_database_replica_states AS dbr ON dbcs.replica_id = dbr.replica_id AND dbcs.group_database_id = dbr.group_database_id
+		WHERE ags.primary_replica = @@servername and ar.replica_server_name = @@servername --and dbcs.database_name = db.name --and (dbcs.is_database_joined = 0 or dbr.synchronization_health = 0)
+		

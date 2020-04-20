@@ -1,0 +1,43 @@
+-- http://www.databasejournal.com/features/mssql/new-user-defined-server-roles-in-sql-server-2012.html
+-- http://msdn.microsoft.com/en-us/library/ms191465.aspx
+--!!sqlcmd -S AU-AAPSQLTRN001 -E -d master -i "\\au-aapopsprd001\sqlsecuritysetup$\SecuritySetup.sql"
+
+-- Builtin permissions
+SELECT * FROM sys.fn_builtin_permissions(DEFAULT) 
+--WHERE 
+--	class_desc IN ('ENDPOINT','LOGIN','SERVER','AVAILABILITY GROUP','SERVER ROLE') 
+--	parent_covering_permission_name like 'VIEW%'
+ORDER BY class_desc, permission_name
+GO
+
+SELECT role.name AS RoleName, --role.principal_id,
+	role.type_desc AS RoleType,
+	member.name AS MemberName, -- member.member_principal_id, 
+	member.type_desc AS MemberType
+,sp.*
+FROM sys.server_role_members rm
+JOIN sys.server_principals AS role ON rm.role_principal_id = role.principal_id
+JOIN sys.server_principals AS member ON rm.member_principal_id = member.principal_id
+LEFT JOIN sys.server_permissions sp on role.principal_id = sp.grantee_principal_id
+WHERE role.type = 'R' and role.is_fixed_role = 0 and member.name <>'public';
+
+
+
+select * from sys.server_principals where type = 'R' and is_fixed_role = 0
+
+
+select * from sys.objects where schema_name(schema_id) = 'PWCAU\Jude DSouza'
+
+-- Server level permissions
+select name,type_desc,class_desc,permission_name,sp.type,state_desc
+from sys.server_principals AS member 
+LEFT JOIN sys.server_permissions sp on member.principal_id = sp.grantee_principal_id
+WHERE member.name = 'NT AUTHORITY\SYSTEM'
+go
+
+use [master]
+GO
+GRANT ALTER ANY AVAILABILITY GROUP TO [NT AUTHORITY\SYSTEM] 
+
+
+

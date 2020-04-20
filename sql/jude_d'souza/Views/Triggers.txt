@@ -1,0 +1,11 @@
+select [table]=object_schema_name(t.parent_id)+'.'+object_name(t.parent_id),t.is_disabled,t.is_not_for_replication,t.is_instead_of_trigger,c.text
+from sys.triggers t
+Inner Join sys.syscomments c on c.id = t.object_id
+where t.is_ms_shipped = 0
+and t.parent_id = object_id('<schema.object>')
+
+/*
+An INSTEAD OF trigger is a trigger that allows you to skip an INSERT, DELETE, or UPDATE statement to a table or a view 
+and execute other statements defined in the trigger instead. 
+The actual insert, delete, or update operation does not occur at all.
+*/

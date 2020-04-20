@@ -1,0 +1,19 @@
+--If login access is via a group, verify membership in the group
+--EXEC xp_logininfo 'DETNSW\<GroupAccount>', 'members'
+
+--check DB Access
+execute as login = '<account>';		--< EDIT login
+use <database>;						--< EDIT Database
+select top 1 LoginUser=SUSER_NAME(),* 
+from <schema.table>;				--< EDIT User table
+revert;
+go
+
+--check connection details
+select es.session_id,es.login_name, es.host_name, es.host_process_id, [program_name] = es.program_name + case when es.program_name=es.client_interface_name then '' else ' ('+es.client_interface_name+')'end
+,clientAddress=isnull(ec.client_net_address,'')+isnull(':'+cast(ec.client_tcp_port as varchar(10)),''),localAddress=isnull(ec.local_net_address,'')+isnull(','+cast(ec.local_tcp_port as varchar(10)),'')
+,ec.auth_scheme,ec.net_transport
+,es.login_time,es.last_request_start_time,es.last_request_end_time
+from sys.dm_exec_sessions es	-- SQL Server logical representation of a connection. multiple worker (threads) maybe assigned to service this request. 
+inner join sys.dm_exec_connections ec on ec.session_id = es.session_id
+where ec.client_net_address <> '<local machine>'

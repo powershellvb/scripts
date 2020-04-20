@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ViewSetting xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <columnSettings>
+    <ColumnSetting name="name">
+      <width>160</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="timestamp">
+      <width>160</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="client_hostname">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="client_app_name">
+      <width>161</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="server_principal_name">
+      <width>162</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="client_connection_id">
+      <width>230</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="session_id">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="database_name">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="duration">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="cpu_time">
+      <width>93</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="logical_reads">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="physical_reads">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="writes">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="row_count">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="result">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="object_name">
+      <width>100</width>
+      <mergedColumns />
+    </ColumnSetting>
+    <ColumnSetting name="[SQL]">
+      <width>2806</width>
+      <mergedColumns>
+        <string>batch_text</string>
+        <string>statement</string>
+      </mergedColumns>
+    </ColumnSetting>
+  </columnSettings>
+</ViewSetting>

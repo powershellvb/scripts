@@ -1,0 +1,29 @@
+-- https://www.sqlshack.com/insight-into-the-sql-server-buffer-cache/
+
+-- Buffer Pool contents by Allocation Unit
+SELECT DB=db_name(BD.database_id),Obj=max(isnull(object_schema_name(P.object_id)+'.','')+object_name(P.object_id)),IndexName=max(I.name),BD.database_id,BD.allocation_unit_id
+,ObjRows=MAX(P.rows), UsedPages=MAX(A.used_pages),BD.page_type--, is_in_bpool_extension 
+,[Rows]=sum(BD.row_count),Pages=count(BD.page_type),freeSpaceKB=sum(free_space_in_bytes)/1024
+FROM 	 sys.dm_os_buffer_descriptors BD
+inner join sys.allocation_units A on  BD.allocation_unit_id = A.allocation_unit_id
+inner join sys.partitions P on A.container_id = case a.type % 2 when 0 then p.partition_id else p.hobt_id end
+inner join sys.indexes I on I.object_id = P.object_id and I.index_id = P.index_id
+WHERE OBJECTPROPERTY(I.object_id,'IsUserTable') = 1 
+	AND (BD.database_id > 4 OR BD.database_id = 2) AND BD.database_id != 32767 -- if querying all user databases, exclude system & ResourceDB databases 
+	AND BD.database_id = db_id() AND P.object_id = object_id('dbo.ProviderNotificationTracking') -- if querying specific database and table
+GROUP BY GROUPING SETS((BD.database_id,BD.allocation_unit_id,BD.page_type),(BD.database_id,BD.allocation_unit_id), (BD.database_id))
+
+
+/*
+
+SELECT <PK columns>,plf=sys.fn_PhysLocFormatter(%%physloc%%),p.*  
+FROM <table>-- WITH (INDEX = 1)
+CROSS APPLY sys.fn_PhysLocCracker(%%physloc%%) p;	-- file:page:slot
+
+SELECT    bd.file_id,bd.page_id,bd.page_level,bd.row_count,bd.free_space_in_bytes,bd.is_modified,bd.numa_node,bd.read_microsec
+FROM sys.dm_os_buffer_descriptors AS obd
+WHERE database_id = DB_ID()  
+AND    bd.page_id = <PAGE> -- BETWEEN PAGE> AND PAGE n>
+ORDER BY page_id
+
+*/

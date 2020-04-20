@@ -1,0 +1,3 @@
+select * from sys.dm_server_registry where registry_key like 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL%\MSSQLServer\SuperSocketNetLib\Tcp\IPAll' and  value_name  = 'TcpPort'
+select * from sys.dm_server_registry where registry_key like 'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL%\MSSQLServer\SuperSocketNetLib\Tcp\IP[246-9]' and  value_name  = 'IpAddress' order by 1
+go

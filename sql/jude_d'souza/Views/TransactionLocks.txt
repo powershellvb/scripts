@@ -1,0 +1,60 @@
+-- http://weblogs.sqlteam.com/mladenp/archive/2008/04/29/SQL-Server-2005-Get-full-information-about-transaction-locks.aspx
+-- https://www.microsoftpressstore.com/articles/article.aspx?p=2233327&seqNum=3
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT  L.request_session_id AS SPID,
+	blockingSPID=wt.blocking_session_id,
+	L.resource_type, 
+	LockedResource = CASE
+		WHEN l.resource_type = 'DATABASE' THEN db_name(L.resource_database_id)  
+		WHEN l.resource_type IN ('OBJECT','PAGE','KEY','RID') THEN db_name(L.resource_database_id)+
+		ISNULL('.'+object_schema_name(P.object_id,L.resource_database_id)+'.'+object_name(P.object_id,L.resource_database_id)+isnull('.'+i.name,''),'')
+		ELSE l.resource_type END, L.resource_associated_entity_id,
+	l.resource_description, 	
+	L.request_mode,	
+	L.request_status,
+	ST.text AS SqlStatementText,  
+	ES.login_name,
+	ES.host_name,
+	CN.auth_scheme,
+	TST.is_user_transaction,
+	TransactionName=AT.name
+	,RowDetailCmd = CASE WHEN l.resource_type = 'KEY' THEN 'select [file:page:slot]=sys.fn_PhysLocFormatter(%%physloc%%),KeyHashValue=%%lockres%%, * from '+
+	db_name(L.resource_database_id)+'.'+object_schema_name(P.object_id,L.resource_database_id)+'.'+object_name(P.object_id,L.resource_database_id)+' with (nolock) where %%lockres%% = '''+rtrim(l.resource_description)+'''' ELSE '' END
+-- select top 1000 *
+FROM    sys.dm_tran_locks L
+INNER JOIN sys.partitions P ON L.resource_associated_entity_id = case l.resource_type when 'OBJECT' then p.object_id else p.hobt_id end
+INNER JOIN sys.indexes i ON i.object_id = P.object_id and i.index_id = p.index_id
+INNER JOIN sys.dm_exec_sessions ES ON ES.session_id = L.request_session_id
+INNER JOIN sys.dm_exec_connections CN ON CN.session_id = ES.session_id
+CROSS APPLY sys.dm_exec_sql_text(CN.most_recent_sql_handle) AS ST
+LEFT JOIN sys.dm_os_waiting_tasks as wt ON wt.resource_address = l.lock_owner_address
+LEFT JOIN sys.dm_tran_session_transactions TST ON ES.session_id = TST.session_id
+LEFT JOIN sys.dm_tran_active_transactions AT ON TST.transaction_id = AT.transaction_id
+WHERE L.request_session_id <> @@SPID
+	AND resource_database_id = db_id() and l.resource_type IN ('OBJECT','PAGE','KEY','RID')
+ORDER BY L.request_session_id
+
+
+-- 2016 and higher 
+-- select * from sys.dm_exec_query_statistics_xml(session_id);
+-- SELECT * FROM sys.dm_exec_session_wait_stats where session_id=<SPID>
+
+-- SQL 2019
+;WITH tran_locks
+AS
+(
+    SELECT
+        tl.resource_database_id,
+        SUBSTRING(tl.resource_description, 0, CHARINDEX(':', tl.resource_description)) AS file_id,
+        SUBSTRING(tl.resource_description, CHARINDEX(':', tl.resource_description) + 1, LEN(tl.resource_description)) AS page_id
+    FROM sys.dm_tran_locks AS tl
+    WHERE
+		tl.request_session_id = 52
+        AND tl.resource_type = 'PAGE'
+)
+SELECT OBJECT_NAME(page_info.object_id) AS table_name, page_info.*
+FROM tran_locks AS t
+CROSS APPLY  sys.dm_db_page_info(t.resource_database_id, t.file_id, t.page_id,DEFAULT) AS page_info
+
+

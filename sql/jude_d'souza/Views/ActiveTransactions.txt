@@ -1,0 +1,46 @@
+
+exec monitor..sp_WhoIsActive @get_outer_command=1, @get_transaction_info=1 -- ,@get_plans=1
+go
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+;with tt (val,txt) AS (select a.val,a.txt from (values (1, 'Read/Write Transaction'),(2, 'Read-Only Transaction'),(3, 'System Transaction'),(4, 'Distributed Transaction')) a(val, txt))
+	, ts (val,txt) AS (select a.val,a.txt from (values 
+		(0, 'The transaction has not been completely initialized yet'),(1, 'The transaction has been initialized but has not started'),(2, 'The transaction is active'),(3, 'Read-only transaction has ended')
+		,(4, 'The commit process has been initiated on the distributed tran'),(5, 'The transaction is in a prepared state and waiting resolution'),(6, 'The transaction has been committed')
+		,(7, 'The transaction is being rolled back'),(8, 'The transaction has been rolled back')) a(val, txt))
+	, tsl (val,txt) AS (select a.val,a.txt from (values (0,'Unspecified'),(1,'ReadUncomitted'),(2,'ReadCommitted'),(3,'Repeatable'),(4,'Serializable'),(5,'Snapshot')) a(val, txt))
+SELECT tst.session_id
+, es.original_login_name, es.host_name, program_name=es.program_name + case when es.program_name=es.client_interface_name then '' else ' ('+es.client_interface_name+')' end
+, DbName=DB_NAME(tdt.database_id)
+, [TransDuration(s)]=DATEDIFF(SECOND, tat.transaction_begin_time, GETDATE())
+, log_bytes_used=tdt.database_transaction_log_bytes_used
+, log_record_count=tdt.database_transaction_log_record_count
+, replicate_record_count=tdt.database_transaction_replicate_record_count
+, ts.txt AS TransactionState
+, CurrentQuery=SUBSTRING(TXT.text, ( er.statement_start_offset / 2 ) + 1,
+    ( ( CASE WHEN er.statement_end_offset = -1
+                    THEN LEN(CONVERT(NVARCHAR(MAX), TXT.text)) * 2
+                    ELSE er.statement_end_offset
+            END - er.statement_start_offset ) / 2 ) + 1)
+, ParentQuery=TXT.text
+, TransactionType=tt.txt
+, TransactionName=tat.name
+, StartTime=tat.transaction_begin_time
+, tst.open_transaction_count,es.open_transaction_count
+, transaction_isolation_level = tsl.txt
+, tdt.database_transaction_begin_lsn
+, tdt.database_transaction_last_lsn
+, tdt.database_transaction_most_recent_savepoint_lsn
+, tdt.database_transaction_commit_lsn
+, tdt.database_transaction_last_rollback_lsn
+FROM sys.dm_tran_session_transactions AS tst -- link sessions to transactions
+INNER JOIN sys.dm_tran_active_transactions AS tat ON tst.transaction_id = tat.transaction_id -- transactional information relating to status, type, and state of each transaction currently initiated but not yet completed
+INNER JOIN sys.dm_tran_database_transactions AS tdt ON tst.transaction_id = tdt.transaction_id -- transaction state, status, type and also provides extremely granular transaction log metrics and record count and size metadata
+INNER JOIN sys.dm_exec_sessions es ON tst.session_id = es.session_id
+INNER JOIN sys.dm_exec_requests er ON tst.session_id = er.session_id
+left join ts on tat.transaction_state = ts.val
+left join tt on tat.transaction_type = tt.val
+left join tsl on es.transaction_isolation_level = tsl.val
+CROSS APPLY sys.dm_exec_sql_text(er.sql_handle) TXT
+--ORDER BY tdt.database_transaction_log_record_count DESC -- log space size.
+ORDER BY [TransDuration(s)] DESC -- transaction duration.

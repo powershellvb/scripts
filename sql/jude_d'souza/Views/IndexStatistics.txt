@@ -1,0 +1,39 @@
+-- query optimization statistics details for target indexes / columns in selected tables 
+select [database]=db_name(), [table]=object_schema_name(ss.object_id)+'.'+object_name(ss.object_id), [column]=substring(scols.cols, 3, len(scols.cols)), statname=ss.name
+,last_updated,Prows=p.rows,Srows=sp.rows,rows_sampled,sample_pc=rows_sampled * 100. / sp.rows,steps,unfiltered_rows,modification_counter,mod_pc=modification_counter * 100 / sp.rows--,capture_time=getdate()
+,UpdStatsCmd = 'UPDATE STATISTICS '+object_schema_name(ss.object_id)+'.'+object_name(ss.object_id)+' '+ss.name+' WITH FULLSCAN;' -- ,PERSIST_SAMPLE_PERCENT=ON;' -- SQL Server 2016 SP1+
+,ShowStatsCmd = 'DBCC SHOW_STATISTICS ('''+object_schema_name(ss.object_id)+'.'+object_name(ss.object_id)+''','+ss.name+');'
+from  sys.stats ss
+CROSS APPLY sys.dm_db_stats_properties(ss.object_id, ss.stats_id) AS sp 
+--CROSS APPLY sys.dm_db_incremental_stats_properties(ss.object_id, ss.stats_id) AS sp 
+left join sys.partitions p on p.object_id = ss.object_id and p.index_id = ss.stats_id --and p.partition_number = sp.partition_number
+CROSS  APPLY (SELECT ', ' + c.name FROM sys.stats_columns sc JOIN sys.columns c ON sc.object_id = c.object_id AND sc.column_id = c.column_id WHERE  sc.object_id = ss.object_id AND  sc.stats_id  = ss.stats_id ORDER  BY sc.stats_column_id FOR XML PATH('')) AS scols(cols)
+WHERE OBJECTPROPERTY(ss.OBJECT_ID,'IsUserTable') = 1 and
+( -- EDIT >>
+		ss.object_id --in (select object_id from sys.objects where name like 'Group_%_Relationship') 
+				 = object_id('dbo.FactIncident')
+	)
+	--and ss.name = 'IX_tblCONTACT_TYPE_FORENAME'
+	and substring(scols.cols, 3, len(scols.cols)) like 'TemplateKey'
+
+/*
+-- STAT_HEADER
+--Updated: The date and time the index statistics were last updated
+--Rows: The total number of rows in the table
+--Rows Sampled: The number of rows sampled for index statistics information
+--Steps: The number of distribution steps
+--Density: The selectivity of the first index column prefix
+--Average key length: The average length of the first index column prefix
+-- DENSITY_VECTOR
+--All density: The selectivity of a set of index column prefixes
+--Average length: The average length of a set of index column prefixes
+--Columns: The names of index column prefixes for which All density and Average length are displayed
+-- HISTOGRAM
+--RANGE_HI_KEY: The upper bound value of a histogram step
+--RANGE_ROWS: The number of rows from the sample that fall within a histogram step, not counting the upper bound
+--EQ_ROWS: The number of rows from the sample that are equal in value to the upper bound of the histogram step
+--DISTINCT_RANGE_ROWS: The number of distinct values within a histogram step, not counting the upper bound
+--AVG_RANGE_ROWS: The average number of duplicate values within a histogram step, not counting the upper bound (where RANGE_ROWS / DISTINCT_RANGE_ROWS for DISTINCT_RANGE_ROWS > 0)
+
+-- The histogram is always only created for the leading column. So, even with multicolumn statistics, there’s only one histogram. 
+*/

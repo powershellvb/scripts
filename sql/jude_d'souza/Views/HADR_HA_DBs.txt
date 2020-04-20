@@ -1,0 +1,38 @@
+-- :connect pw0991sqs005n1.detnsw.win\prd_ia_read1
+-- :connect pw0991sqp007n1.detnsw.win\entwinwsus1
+-- :connect pw0991sqf003n1.detnsw.win\cesdbi2
+-- :connect pw0992sqs006n1.detnsw.win\OasisLMBR1
+
+SELECT replica_server_name=isnull(ar.replica_server_name,srv.srvname),ag.name,agl.dns_name,role_desc=isnull(ars.role_desc,'nonHA'), UserDBs, HADBs
+FROM (select  @@servername) srv(srvname)
+	LEFT JOIN (master.sys.availability_groups ag 
+	INNER JOIN master.sys.availability_replicas ar ON ag.group_id = ar.group_id
+	INNER JOIN master.sys.dm_hadr_availability_group_states ags ON ags.group_id = ar.group_id -- and ags.primary_replica = ar.replica_server_name
+	INNER JOIN master.sys.dm_hadr_availability_replica_states ars ON ar.group_id = ars.group_id AND ar.replica_id = ars.replica_id and ars.is_local = 1
+	inner join master.sys.availability_group_listeners agl on ag.group_id = agl.group_id
+	outer apply (select UserDBs=count(*),HADBs=SUM(isnull(cast(dbcs.is_database_joined as int),0))
+		FROM sys.databases db
+		LEFT JOIN (master.sys.dm_hadr_database_replica_cluster_states AS dbcs 	
+		INNER JOIN master.sys.dm_hadr_availability_replica_states ars ON ars.replica_id = dbcs.replica_id)
+		on dbcs.database_name = db.name
+		where db.database_id > 5 and db.name not like 'AG_Test%'
+	) as dbs(UserDBs, HADBs)
+) on ar.replica_server_name = srv.srvname
+ORDER BY 1,2;
+
+SELECT @@version, DB=db.name, db.recovery_model_desc, SizeMB = mf.size/128, ar.replica_server_name,ag.name,agl.dns_name,ars.role_desc
+,joined=dbcs.is_database_joined,dbr.is_local,dbr.is_primary_replica
+FROM sys.databases db
+inner join sys.master_files mf on mf.database_id = db.database_id and type_desc = 'ROWS'
+	LEFT JOIN (master.sys.availability_groups ag 
+	INNER JOIN master.sys.availability_replicas ar ON ag.group_id = ar.group_id
+	INNER JOIN master.sys.dm_hadr_availability_group_states ags ON ags.group_id = ar.group_id -- and ags.primary_replica = ar.replica_server_name
+	INNER JOIN sys.dm_hadr_availability_replica_states ars ON ar.group_id = ars.group_id AND ar.replica_id = ars.replica_id and ars.is_local = 1
+	inner join sys.availability_group_listeners agl on ag.group_id = agl.group_id	
+	left JOIN master.sys.dm_hadr_database_replica_cluster_states AS dbcs ON dbcs.replica_id = AR.replica_id
+	left JOIN master.sys.dm_hadr_database_replica_states AS dbr ON dbcs.replica_id = dbr.replica_id AND dbcs.group_database_id = dbr.group_database_id
+) on dbcs.database_name = db.name
+where db.database_id > 5
+ORDER BY 1,2;
+go
+

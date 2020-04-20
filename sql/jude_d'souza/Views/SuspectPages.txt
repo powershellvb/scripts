@@ -1,0 +1,73 @@
+-- Suspect pages
+SELECT DBName=DB_NAME(sp.database_id), PageID=cast(sp.database_id as varchar(3))+','+cast(sp.file_id as varchar(3))+','+ cast(sp.page_id as varchar(20)), sp.event_type, sp.error_count, sp.last_update_date
+	,mf.name AS Logical_Name,mf.type_desc,mf.Physical_Name
+--	,apr.error_type, apr.page_status, apr.modification_time
+	,LastGoodCheckDbTime=DATABASEPROPERTYEX(DB_NAME(sp.database_id),'LastGoodCheckDbTime') -- 	DBCC DBINFO('StackOverflow') WITH TABLERESULTS
+	,SQLVersion=serverproperty('ProductMajorVersion')
+FROM msdb.dbo.suspect_pages sp WITH (NOLOCK)
+inner join sys.master_files mf on mf.database_id = sp.database_id and mf.file_id = sp.file_id
+--left join sys.dm_hadr_auto_page_repair apr on apr.database_id = sp.database_id and apr.file_id = sp.file_id and apr.page_id = sp.page_id 
+ORDER BY sp.database_id OPTION (RECOMPILE);
+
+select * from sys.dm_hadr_auto_page_repair
+select * from sys.dm_db_mirroring_auto_page_repair
+
+/* -- pre 2016 - dbccLastKnownGood
+declare @dbinfo table(ParentObject varchar(255),[Object] varchar(255),[Field] varchar(255),[Value] varchar(255))
+insert into @dbinfo
+execute('dbcc dbinfo(''MMProdDB'') with tableresults')
+select Field, Value from @dbinfo where Field like 'dbi_dbccLastKnownGood'
+*/
+
+-- dbcc page ( {‘dbname’ | dbid}, filenum, pagenum [, printopt={0|1|2|3} ]) WITH TABLERESULTS
+-- 0 – Prints only page header related information
+-- 1 – Prints page header and page slot array dump with hex dump for each row
+-- 2 – Prints page header and whole page hex dump
+-- 3 – Prints detailed information of per row along with page header
+
+--replace dbid,filenum,pagenum with PageID from msdb.dbo.suspect_pages 
+DBCC page (6,1,59386674,  0) WITH TABLERESULTS -- Metadata: ObjectId & Metadata: IndexId
+
+-- get the index object
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+;with Vindex as
+(
+	select i.object_id, i.index_id, i.name, i.type_desc,i.is_primary_key, i.is_unique,i.is_unique_constraint,i.fill_factor,i.is_disabled,i.allow_row_locks,i.allow_page_locks,i.ignore_dup_key,i.has_filter,i.filter_definition
+	,indexcols = stuff((select ', '+C.NAME from sys.index_columns IC join sys.columns C on C.OBJECT_ID = IC.OBJECT_ID and C.COLUMN_ID = IC.COLUMN_ID and IC.is_included_column = 0
+							where IC.OBJECT_ID = I.OBJECT_ID AND IC.INDEX_ID = I.INDEX_ID order by IC.KEY_ORDINAL for XML PATH ('')),1,2,'')
+	from sys.indexes as i
+	where OBJECTPROPERTY(i.object_id,'IsUserTable') = 1
+	--and OBJECT_SCHEMA_NAME(i.object_id)  <> 'cdc'
+)
+select 
+ [object]=db_name()+'.'+object_schema_name(i.object_id)+'.'+object_name(i.object_id), i.name AS [INDEX_NAME], i.index_id , i.type_desc
+, PK=i.IS_PRIMARY_KEY,UK=(i.is_unique|i.is_unique_constraint)
+, fill_factor=case i.fill_factor when 0 then 100 else i.fill_factor end --,IDK=ignore_dup_key,FLT=i.has_filter
+, i.indexcols
+, i.allow_row_locks, i.allow_page_locks
+, ps.rows, ps.partition_number, ps.data_compression_desc
+, au.*, nonLeafPages=au.used_pages-au.data_pages, UsedMB=au.used_pages/128, DataMB=au.data_pages/128, nonLeafMB=(au.used_pages-au.data_pages)/128
+, rebuildCmd='ALTER INDEX '+i.NAME+' ON '+object_schema_name(i.object_id)+'.'+object_name(i.object_id)+' REBUILD WITH (ONLINE=ON, SORT_IN_TEMPDB=ON)'  --,FILLFACTOR=90, DATA_COMPRESSION=PAGE, ALLOW_ROW_LOCKS=ON,ALLOW_PAGE_LOCKS=ON
+FROM	Vindex i --inner join sys.objects o on o.object_id = i.object_id and o.name in ('invoiceevents','docqueues','documentslocks','documents','documentposition','docrefby','docuserdefs','docprofileconnection')
+left join sys.partitions ps on ps.object_id = i.object_id AND ps.index_id = i.index_id 
+left join sys.allocation_units au on au.container_id = case au.type % 2 when 0 then ps.partition_id else ps.hobt_id end and au.type=1 -- IN_ROW_DATA:- distinct list
+--cross apply sys.dm_db_database_page_allocations(DB_ID(), i.object_id, i.index_id, NULL, 'DETAILED') dpa -- LIMITED, DETAILED
+where OBJECTPROPERTY(i.OBJECT_ID,'IsUserTable') = 1 
+	and i.OBJECT_ID = 501576825
+	and i.index_id = 4
+OPTION (MAXDOP 1)
+
+-- select index column(s) from the table using INDEX=<hint>
+SELECT MessageName, ServerId, Edition,  TimeLogged, BlockNumber, BlockRecipientIndex
+,KeyHashValue=%%lockres%%,[file:page:slot]=sys.fn_PhysLocFormatter(%%physloc%%)
+from MMProdDB.dbo.Message WITH (NOLOCK, INDEX=IX_MessageName)
+WHERE MessageName between 'B5bafe7ed0001' and 'B5bafe7f60001' and
+ sys.fn_PhysLocFormatter(%%physloc%%) like '(1:59386674:%'
+--and %%lockres%% = '(1d1b58a1cca5)'
+--order by 1,2,3
+
+
+
+ALTER INDEX IX_MessageName ON dbo.Message REBUILD PARTITION=1 WITH (MAXDOP=1, ONLINE=ON, SORT_IN_TEMPDB=ON)
+

@@ -1,0 +1,39 @@
+-- HADR Cluster info
+
+select * from sys.dm_hadr_cluster
+
+-- Ensure Cluster Node state is UP
+select cm.member_name,member_type_desc,member_state_desc,number_of_quorum_votes,network_subnet_ip,network_subnet_ipv4_mask,network_subnet_prefix_length,is_public,is_ipv4
+from sys.dm_hadr_cluster_members cm 
+left join sys.dm_hadr_cluster_networks cn on cn.member_name = cm.member_name
+
+-- Ensure dns listener state is ONLINE
+select dns_name,port,ip_address,ec.local_tcp_port,is_conformant,ip_configuration_string_from_cluster,ip_address,ip_subnet_mask,is_dhcp,network_subnet_ip,network_subnet_prefix_length,network_subnet_ipv4_mask,state_desc
+from sys.availability_group_listeners agl 
+inner join sys.availability_group_listener_ip_addresses aglip on aglip.listener_id = agl.listener_id 
+cross apply sys.dm_exec_connections ec
+WHERE state = 1 and ec.local_tcp_port IS NOT NULL  and session_id = @@SPID
+order by aglip.state desc
+
+SELECT * FROM sys.dm_tcp_listener_states WHERE is_ipv4 = 1 AND [type] = 0 AND ip_address <> '127.0.0.1' -- type: 0 = Transact-SQL
+
+-- Ensure the endpoint state is STARTED
+select tcpe.port,dme.* from sys.database_mirroring_endpoints dme inner join sys.tcp_endpoints tcpe on tcpe.name = dme.name
+
+
+
+-- SQL Services
+select * from sys.dm_server_services
+select * from sys.dm_os_sys_info
+SELECT registry_key, value_name, value_data FROM sys.dm_server_registry WHERE registry_key LIKE N'HKLM\Software\Microsoft\Microsoft SQL Server\MSSQL%CurrentVersion';
+
+
+/*
+use master
+GO
+alter endpoint [mirroring] state = stopped;
+GO
+alter endpoint [mirroring] state = started;
+GO 
+
+*/

@@ -1,0 +1,18 @@
+;with iType (val,txt) AS (select a.val,a.txt from (values(0,'HEAP'),(1,'CLUSTERED'),(2,'NONCLUSTERED')) a(val, txt))
+SELECT ID
+,DatabaseName+'.'+SchemaName+'.'+ObjectName+ISNULL('.'+IndexName,'')+ISNULL('.'+StatisticsName,'')+ISNULL('.'+cast(PartitionNumber as varchar(3)),'') AS [DB/Object/Index/Statistic/Partition]
+,isnull(iType.txt,'') AS IndexType
+,case when StatisticsName is null then ei.value('(./PageCount)[1]', 'int') else ei.value('(./RowCount)[1]', 'int') end AS [Rows/Pages]
+,case when StatisticsName is null then ei.value('(./Fragmentation)[1]', 'real') else ei.value('(./ModificationCounter)[1]', 'int') end AS [Level]
+,CommandType
+,convert(VARCHAR(20), StartTime, 120) as StartTime
+,convert(VARCHAR(20), EndTime, 120) as EndTime
+,Duration=datediff(second, StartTime, EndTime)
+,Command
+--,ExtendedInfo
+FROM monitor.dbo.CommandLog clog
+left join iType on iType.val = clog.IndexType
+cross apply clog.ExtendedInfo.nodes('/ExtendedInfo') as lei(ei)
+--where StartTime > '2020-03-11'
+order by 1
+

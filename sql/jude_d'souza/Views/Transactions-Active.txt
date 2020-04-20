@@ -1,0 +1,100 @@
+/*
+CREATE TABLE [SystemMonitoring].[activeTransactions](
+	[session_id] [int] NOT NULL,
+	[blocking_session_id] [int] NULL,
+	[Database] [nvarchar](128) NULL,
+	[database_transaction_begin_time] [datetime] NULL,
+	[captureTime] [datetime] NOT NULL,
+	[Duration] [int] NULL,
+	[TransactionType] [varchar](12) NULL,
+	[TransactionState] [varchar](32) NULL,
+	[DbTransactionState] [varchar](32) NULL,
+	[wait_time] [int] NULL,
+	[current_wait_type] [nvarchar](60) NULL,
+	[last_wait_type] [nvarchar](60) NULL,
+	[transaction_isolation_level] [smallint] NOT NULL,
+	[log_record_count] [bigint] NOT NULL,
+	[log_bytes_used] [bigint] NOT NULL,
+	[StoredProcedure] [nvarchar](128) NULL,
+	[TransactionText] [nvarchar](max) NULL,
+	[login_name] [nvarchar](128) NOT NULL,
+	[host_name] [nvarchar](128) NULL,
+	[program_name] [nvarchar](154) NULL
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+
+INSERT INTO [SystemMonitoring].[activeTransactions](
+session_id,
+blocking_session_id,
+[Database],
+database_transaction_begin_time,
+captureTime,
+Duration,
+TransactionType,
+TransactionState,
+DbTransactionState,
+wait_time,
+current_wait_type,
+last_wait_type,
+transaction_isolation_level,
+log_record_count,
+log_bytes_used,
+StoredProcedure,
+TransactionText,
+login_name,
+host_name,
+program_name
+)
+*/
+SELECT DTST.[session_id],
+	DER.blocking_session_id,
+	DB_NAME (DTDT.database_id) AS [Database], 
+	DTDT.database_transaction_begin_time, 
+	captureTime = getdate(),
+	Duration = DATEDIFF(second,DTDT.[database_transaction_begin_time], GETDATE()), 
+	TransactionType = CASE DTAT.transaction_type 
+	WHEN 1  THEN 'Read/write' 
+		WHEN 2  THEN  'Read-only' 
+		WHEN 3  THEN  'System' 
+		WHEN 4  THEN  'Distributed' 
+	END, 
+	TransactionState = CASE DTAT.transaction_state 
+	WHEN 0  THEN 'Not completely initialized'  
+		WHEN 1  THEN  'Initialized, not started' 
+		WHEN 2  THEN  'Active' 
+		WHEN 3  THEN  'R/O Ended'  
+		WHEN 4  THEN  'DT Commit initiated'  
+		WHEN 5  THEN  'Prepared, awaiting resolution' 
+		WHEN 6  THEN  'Committed' 
+		WHEN 7  THEN  'Rolling back' 
+		WHEN 8  THEN  'Rolled back' 
+	END, 
+	DbTransactionState = CASE DTDT.database_transaction_state
+		WHEN 1  THEN  'Not initialized,' 
+		WHEN 2  THEN  'N/A' 
+		WHEN 3  THEN  'initialized. No log records'  
+		WHEN 4  THEN  'Log records generated'  
+		WHEN 5  THEN  'Prepared' 
+		WHEN 10  THEN  'Committed' 
+		WHEN 11  THEN  'Rolled back' 
+		WHEN 12  THEN  'Committing' 
+	END,
+    DER.wait_time,
+    current_wait_type = DER.wait_type,
+	DER.last_wait_type,
+	DES.transaction_isolation_level,
+	log_record_count=DTDT.database_transaction_log_record_count, 
+	log_bytes_used=DTDT.database_transaction_log_bytes_used,
+    StoredProcedure = Coalesce(Quotename(Db_name(DEST.dbid)) + N'.' + Quotename(Object_schema_name(DEST.objectid,DEST.dbid)) + N'.' + Quotename(Object_name(DEST.objectid,DEST.dbid)), ''),
+	TransactionText = CASE WHEN DER.sql_handle IS NULL THEN DEST.text ELSE Substring(DEST.TEXT,(DER.statement_start_offset/2)+1, ((CASE DER.statement_end_offset WHEN -1 THEN Datalength(DEST.TEXT) ELSE DER.statement_end_offset END - DER.statement_start_offset) / 2)+1) END, 
+	DES.login_name, DES.host_name, [program_name] = DES.program_name + case when DES.program_name=DES.client_interface_name then '' else ' ('+DES.client_interface_name+')'end
+	--,DEQP.[query_plan] AS [Last Query Plan] 
+FROM sys.dm_tran_database_transactions DTDT  
+INNER JOIN sys.dm_tran_session_transactions DTST  ON DTST.transaction_id = DTDT.transaction_id 
+INNER JOIN sys.dm_tran_active_transactions DTAT  ON DTST.transaction_id = DTAT.transaction_id 
+INNER JOIN sys.dm_exec_sessions DES ON DES.session_id  = DTST.session_id  
+INNER JOIN sys.dm_exec_connections DEC  ON DEC.session_id  = DTST.session_id
+LEFT  JOIN sys.dm_exec_requests DER ON DER.session_id  = DTST.session_id
+CROSS APPLY sys.dm_exec_sql_text(ISNULL(DER.sql_handle,DEC.most_recent_sql_handle))  AS DEST 
+--OUTER APPLY sys.dm_exec_query_plan(DER.plan_handle)  AS DEQP 
+WHERE DTST.is_user_transaction = 1 and DTDT.database_transaction_state > 3

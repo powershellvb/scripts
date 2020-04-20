@@ -1,0 +1,43 @@
+--:connect PW0000SQLPM004.detnsw.win\EBS_PROD_RA1 -- 2008
+--:connect PW0991SQS001N1.detnsw.win\EBS_PROD_RA1 -- 2016
+
+-- Currently executing reports
+-- The report server evaluates running jobs at 60 second intervals. 
+-- At each 60 second interval, the report server compares actual process time against the report execution time-out value. 
+-- If the processing time for a report exceeds the report execution time-out value, report processing will stop.
+SELECT JobID, StartDate, ComputerName, RequestName, RequestPath 
+    ,JobAction, JobType, JobStatus,Timeout, ActiveSeconds = Datediff(second,rj.startdate, Getdate()), Description, ADUser=SUSER_SNAME(Users.[Sid])--, Users.[UserName], Users.[AuthType]
+FROM ReportServer.dbo.runningjobs rj
+INNER JOIN ReportServer.dbo.users ON rj.userid = users.userid 
+ORDER BY rj.startdate;
+
+exec monitor..sp_whoisactive @find_block_leaders=1
+
+-- Historical Report execution - TimeDataRetrieval,TimeProcessing,TimeRendering in miliseconds
+-- https://blogs.msdn.microsoft.com/robertbruckner/2009/01/06/executionlog2-view-analyzing-and-optimizing-reports/
+
+select 
+	InstanceName,ItemPath,UserName,ExecutionId,[Format],[Status],TimeStart,TimeEnd,[time(s)]=datediff(second, TimeStart, TimeEnd),TimeDataRetrieval,TimeProcessing,TimeRendering,[RowCount],ByteCount,[Parameters],RequestType,ItemAction,Source
+from ReportServer.dbo.ExecutionLog3 log3
+where TimeStart --between '2018-03-27 16:00' and '2018-03-28 19:00'
+		> dateadd(day, -1, getdate()) 
+	and Status  <> 'rsSuccess'
+	--and datediff(second, TimeStart, TimeEnd) > 1740 -- 29 seconds (default timeout 30 seconds)
+	--and ItemPath like '/Tribal_EBSPSCHOOLS01/A-NSW-S/Attendance/Student Yearly Absence Report'
+order by --TimeProcessing
+	--TimeRendering
+	--TimeDataRetrieval 
+	--TimeStart
+	[time(s)] 
+		desc;
+		
+		
+-- Report Executions by Parameters
+select minStatus=min([Status]),maxStatus=max([Status]), Times=count(*), minTimeProcessing=min(TimeProcessing),maxTimeProcessing=max(TimeProcessing), Parameters=cast(Parameters as varchar (512)) 
+--InstanceName,ItemPath,UserName,[Format],[Status],TimeStart,TimeEnd,[time(m)]=datediff(minute, TimeStart, TimeEnd),TimeDataRetrieval,TimeProcessing,TimeRendering,[RowCount],ByteCount,[Parameters],RequestType,ItemAction,Source
+from ReportServer.dbo.ExecutionLog3 log3
+where TimeStart --between '2018-03-27 16:00' and '2018-03-28 19:00'
+		> dateadd(day, -1, getdate()) 
+	and ItemPath like '/Tribal_EBSPSCHOOLS01/A-NSW-S/Attendance/Student Yearly Absence Report'
+Group by cast(Parameters as varchar (512))
+having min([Status]) != max([Status])		

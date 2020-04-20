@@ -1,0 +1,40 @@
+SELECT ServiceQueue=object_schema_name(it.parent_object_id)+'.'+object_name(it.parent_object_id),it.name,it.internal_type_desc,i.name,i.type_desc, p.rows 
+FROM sys.internal_tables it
+inner join sys.indexes i on i.object_id = it.object_id and i.index_id = 1
+inner join sys.partitions p on p.object_id = it.object_id and p.index_id = i.index_id
+where internal_type = 201 -- queue_messages
+order by 1
+
+
+select 'sys.databases' AS [sys.databases],service_broker_guid,is_broker_enabled , name, database_id from sys.databases where database_id = DB_ID() 
+select 'sys.service_queues' AS [sys.service_queues],name, activation_procedure,is_activation_enabled,is_enqueue_enabled,is_receive_enabled from sys.service_queues
+select 'sys.transmission_queue' AS [sys.transmission_queue],*,message_body_xml=CONVERT(xml,message_body) from sys.transmission_queue
+select 'sys.conversation_endpoints' AS [sys.conversation_endpoints],* from sys.conversation_endpoints
+select 'sys.dm_broker_activated_tasks' AS [sys.dm_broker_activated_tasks],* from sys.dm_broker_activated_tasks
+select 'Q Backlog Query' AS Backlog , far_service, state_desc, count(*) messages from sys.conversation_endpoints group by state_desc, far_service ORDER BY far_service, state_desc
+	
+SELECT 'ActivatedQStatus' AS ActivatedQStatus,
+	t1.name AS [Service Name],
+	t2.name AS [Queue Name],
+	CASE WHEN t4.state IS NULL THEN 'Not available' ELSE t4.state END AS [Queue State],
+	CASE WHEN t4.tasks_waiting IS NULL THEN '--' ELSE CONVERT(VARCHAR, t4.tasks_waiting) END AS [Tasks Waiting],
+	CASE WHEN t4.last_activated_time IS NULL THEN '--' ELSE CONVERT(VARCHAR, t4.last_activated_time) END AS [Last Activated Time],
+	CASE WHEN t4.last_empty_rowset_time IS NULL THEN '--' ELSE CONVERT(VARCHAR, t4.last_empty_rowset_time) END AS [Last Empty Rowset Time],
+	(
+		SELECT
+		COUNT(*)
+		FROM sys.transmission_queue t6
+		WHERE (t6.from_service_name = t1.name)
+		AND (t5.service_broker_guid = t6.to_broker_instance)
+	) AS [Message Count],
+	t2.activation_procedure,
+	t2.is_activation_enabled,
+	t4.*
+FROM sys.services t1
+JOIN sys.service_queues t2 
+	ON t1.service_queue_id = t2.object_id
+LEFT OUTER JOIN sys.dm_broker_queue_monitors t4 
+	ON t2.object_id = t4.queue_id
+	AND t4.database_id = DB_ID()
+JOIN sys.databases t5 ON t5.database_id = DB_ID()
+WHERE t2.is_ms_shipped = 0 --dont show me system stuff

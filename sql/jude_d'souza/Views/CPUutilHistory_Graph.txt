@@ -1,0 +1,76 @@
+DECLARE @ts_now BIGINT = (SELECT cpu_ticks / (cpu_ticks / ms_ticks) FROM sys.dm_os_sys_info WITH (NOLOCK));
+DECLARE @CPUSQLOut   AS VARCHAR(8000),
+        @CPUIdleOut  AS VARCHAR(8000),
+        @CPUOtherOut AS VARCHAR(8000);
+DECLARE @CPURecords AS INT;
+ 
+WITH CPULoad AS
+(
+    SELECT      TOP (256)
+                y.SQLProcessUtilization                              AS [SQL Server Process CPU Utilization],
+                y.SystemIdle                                         AS [System Idle Process],
+                100 - (y.SystemIdle + y.SQLProcessUtilization)       AS [Other Process CPU Utilization],
+                DATEADD(ms, -1 * (@ts_now - y.timestamp), GETDATE()) AS [Event Time]
+    FROM (
+			SELECT  x.record.value('(./Record/@id)[1]', 'int')                                                   AS record_id,
+					x.record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int')         AS SystemIdle,
+					x.record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') AS SQLProcessUtilization,
+					x.timestamp
+			FROM (
+					SELECT  timestamp, CONVERT(XML, record) AS record
+					FROM    sys.dm_os_ring_buffers WITH (NOLOCK)
+					WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR' AND record LIKE N'%<SystemHealth>%'
+				) AS x
+		) AS y
+    ORDER BY    y.timestamp DESC
+)
+SELECT  @CPUSQLOut = STUFF (
+	(
+		SELECT        ','
+					+ CAST(ROW_NUMBER() OVER (ORDER BY CPULoad.[Event Time]) - COUNT(*) OVER (PARTITION BY 1) AS VARCHAR(10))
+					+ ' ' + CAST(CPULoad.[SQL Server Process CPU Utilization] AS VARCHAR(20))
+		FROM          CPULoad
+		ORDER BY      CPULoad.[Event Time]
+		FOR XML PATH('')
+	),
+	1,
+	1,
+	''
+),
+	@CPUIdleOut = STUFF (
+	(
+		SELECT    ','
+				+ CAST(ROW_NUMBER() OVER (ORDER BY CPULoad.[Event Time]) - COUNT(*) OVER (PARTITION BY 1) AS VARCHAR(10))
+				+ ' ' + CAST(CPULoad.[System Idle Process] AS VARCHAR(20))
+		FROM      CPULoad
+		ORDER BY  CPULoad.[Event Time]
+		FOR XML PATH('')
+	),
+	1,
+	1,
+	''
+),
+	@CPUOtherOut = STUFF (
+	(
+		SELECT    ','
+				+ CAST(ROW_NUMBER() OVER (ORDER BY CPULoad.[Event Time]) - COUNT(*) OVER (PARTITION BY 1) AS VARCHAR(10))
+				+ ' ' + CAST(CPULoad.[Other Process CPU Utilization] AS VARCHAR(20))
+		FROM      CPULoad
+		ORDER BY  CPULoad.[Event Time]
+		FOR XML PATH('')
+	),
+	1,
+	1,
+	''
+),
+	@CPURecords = (SELECT   COUNT(*) FROM   CPULoad);
+ 
+SELECT  geometry::STGeomFromText('LINESTRING(' + @CPUSQLOut + ')', 0) AS CPULoad, 'CPU-SQL' AS Caption
+UNION ALL
+SELECT  geometry::STGeomFromText('LINESTRING(' + @CPUOtherOut + ')', 0) AS CPULoad,
+        'CPU-Other'                                                     AS Caption
+UNION ALL
+SELECT  geometry::STGeomFromText('LINESTRING(' + @CPUIdleOut + ')', 0) AS CPULoad,
+        'CPU-Idle'                                                     AS Caption
+UNION ALL
+SELECT  geometry::Parse('POLYGON ((0 0, 2 0, 2 100, 0 100, 0 0))') AS NowBar, 'NOW' AS caption; 

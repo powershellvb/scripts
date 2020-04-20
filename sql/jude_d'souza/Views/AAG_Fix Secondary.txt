@@ -1,0 +1,82 @@
+
+-- Issues: 
+--Some recovered secondary databases in an AAG are not synchronizing
+--AlwaysOn: The availability replica manager is going offline because the local Windows Server Failover Clustering (WSFC) node has lost quorum.
+--DESCRIPTION: Synchronization of a secondary database, 'DoE-CTX-XD-P1OSite', was interrupted, leaving the database in an inconsistent state. The database will enter the RESTORING state. To complete recovery and bring the database online, use current log backups from the primary database to restore the log records past LSN (30866:10362:1). Alternatively, drop this secondary database, and prepare a new one by restoring a full database backup of the primary database followed by all subsequent log backups.
+-- Each of the following steps needs to be executed one at a time, for each NOT_HEALTHY database listed in step 1
+-- From the Query menu, select SQLCMD Mode
+-- DO NOT EXECUTE THE SCRIPTS AS A SINGLE BATCH
+
+-- 1. Identify NOT_HEALTHY databases on secondary replicas
+:connect <primary>
+use master
+go
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT
+		ag.name,AR.replica_server_name,ags.primary_replica, primaryRecoveryHealth=ags.primary_recovery_health_desc,syncHealth=ags.synchronization_health_desc 
+		,dbcs.database_name,joined=dbcs.is_database_joined,local=dbr.is_local,primaryReplica=dbr.is_primary_replica,suspended=dbr.is_suspended,syncState=dbr.synchronization_state_desc,DBsyncHealth=dbr.synchronization_health_desc,dbr.last_hardened_time
+		,evictPrimary='ALTER AVAILABILITY GROUP [AAG_OTP] REMOVE DATABASE '+dbcs.database_name+';'
+		,joinPrimary='ALTER AVAILABILITY GROUP AAG_OTP ADD DATABASE '+dbcs.database_name+';'
+		,evictSecondary='ALTER DATABASE '+dbcs.database_name+' SET HADR OFF;'
+	FROM master.sys.availability_groups AS AG
+	left JOIN master.sys.availability_replicas AS AR ON AR.group_id=AG.group_id
+	left JOIN master.sys.dm_hadr_availability_group_states AS AGS ON AGS.group_id = AG.group_id
+	left JOIN master.sys.dm_hadr_database_replica_cluster_states AS dbcs ON dbcs.replica_id = AR.replica_id
+	left JOIN master.sys.dm_hadr_database_replica_states AS dbr ON dbcs.replica_id = dbr.replica_id AND dbcs.group_database_id = dbr.group_database_id
+	WHERE ags.primary_replica = @@servername and ar.replica_server_name <> @@servername and (dbcs.is_database_joined = 0 or dbr.synchronization_health = 0) -- NOT_HEALTHY
+	order by database_name
+GO
+
+-- 2. (manually) disable database log backups on the PRIMARY
+
+-- 3. Before evicting the Secondary, find primary log backups taken since the Secondary last_hardened_time 
+:connect <primary>
+-- replace physical_device_name with \\Share
+select mf.physical_device_name,command='RESTORE LOG [' + bs.database_name + '] FROM DISK=N''' + mf.physical_device_name + 
+	''' WITH NORECOVERY, STATS=25 --, CREDENTIAL = N''<credential>''' --< EDIT CREDENTIAL if using FROM URL
+ , bs.* 
+From msdb.dbo.backupset bs
+join msdb.dbo.backupmediafamily mf on bs.media_set_id = mf.media_set_id
+where bs.type = 'L' --and bs.database_name='SharePoint_Config' 
+and bs.backup_start_date > --'2017-09-17'
+	(	SELECT top 1 dbr.last_hardened_time
+		FROM master.sys.availability_groups AS AG
+		left JOIN master.sys.availability_replicas AS AR ON AR.group_id=AG.group_id
+		left JOIN master.sys.dm_hadr_availability_group_states AS AGS ON AGS.group_id = AG.group_id
+		left JOIN master.sys.dm_hadr_database_replica_cluster_states AS dbcs ON dbcs.replica_id = AR.replica_id
+		left JOIN master.sys.dm_hadr_database_replica_states AS dbr ON dbcs.replica_id = dbr.replica_id AND dbcs.group_database_id = dbr.group_database_id
+		WHERE ags.primary_replica = @@servername and ar.replica_server_name <> @@servername and dbcs.database_name = bs.database_name and (dbcs.is_database_joined = 0 or dbr.synchronization_health = 0)
+		order by dbr.last_hardened_time asc)
+order by bs.backup_finish_date asc
+GO
+
+
+-- 4. Evict the secondary db from the AAG (Clone for each affected replica)
+:connect <secondary>
+ALTER DATABASE SharePoint_Config SET HADR OFF;
+go
+
+-- 5. restore missing logs since last_hardened_time on each SECONDARY replica
+:connect <secondary>
+-- drop any snapshots
+-- Copy and paste RESTORE LOG command in a query window connected to the secondary replica and execute
+
+-- 6. Evict the primary database and re-join
+:connect <primary>
+use master
+go
+ALTER AVAILABILITY GROUP [<aag_name>] REMOVE DATABASE SharePoint_Config;
+GO
+ALTER AVAILABILITY GROUP [<aag_name>] ADD DATABASE SharePoint_Config
+GO
+
+-- 7. re-join the database in the secondary replicas (Clone for each affected replica)
+:connect <secondary>
+use master
+go
+ALTER DATABASE SharePoint_Config SET HADR AVAILABILITY GROUP = [<aag_name>]
+go
+
+-- 8. Manually enable database log backups on the PRIMARY after each territory’s databases on all replicas are fixed
+
