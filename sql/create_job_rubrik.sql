@@ -1,0 +1,284 @@
+USE [msdb]
+
+DECLARE @dbnames NVARCHAR(1000) = 'Monitor'
+DECLARE @source_host NVARCHAR(128)
+DECLARE @source_inst NVARCHAR(128)
+DECLARE @agname NVARCHAR(128)
+DECLARE @jobidqry binary(16)
+DECLARE @jobname NVARCHAR(128)
+DECLARE @psfilename NVARCHAR(128)
+DECLARE @jobcmd1 NVARCHAR(MAX)
+DECLARE @jobcmd2 NVARCHAR(MAX)
+DECLARE @jobstep1 sysname
+DECLARE @jobstep2 sysname
+DECLARE @jobstepno int
+DECLARE @query1 NVARCHAR(500)
+DECLARE @query2 NVARCHAR(500)
+DECLARE @query3 NVARCHAR(500)
+DECLARE @RegLocInst NVARCHAR(100)
+DECLARE @RegLocData NVARCHAR(100)
+DECLARE @RegLocMsx NVARCHAR(100)
+DECLARE @MsxServer NVARCHAR(128)
+DECLARE @InstFolder NVARCHAR(128)
+DECLARE @DataFolder NVARCHAR(128)
+
+--SET @source_host = 'dw0991sqp102n1.nsw.education'
+SET @psfilename = 'run-odlogbackup.ps1'
+SET @jobname = N'DETDBA: AdHoc Rubrik Log backup'
+SET @jobstep1 = N'check ' + @psfilename + ' exists'
+SET @jobstep2 = N'run ' + @psfilename + ''
+SELECT @source_inst = CAST(SERVERPROPERTY('InstanceName') AS NVARCHAR(128))
+SELECT @source_host = CAST(SERVERPROPERTY('MachineName') AS NVARCHAR(128))
+
+-- get instance folder
+SET @RegLocInst = 'SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL'
+ EXEC [master].[dbo].[xp_regread]    @rootkey = N'HKEY_LOCAL_MACHINE',
+                                    @key = @RegLocInst,
+                                    @value_name = @source_inst,
+									@value = @InstFolder OUTPUT
+-- get data folder
+SET @RegLocData = 'SOFTWARE\Microsoft\Microsoft SQL Server\' + @InstFolder + '\Setup'
+EXEC [master].[dbo].[xp_regread]    @rootkey = N'HKEY_LOCAL_MACHINE',
+                                    @key = @RegLocData,
+                                    @value_name = N'SQLDataRoot',
+									@value = @DataFolder OUTPUT
+-- get msx server
+SET @RegLocMsx = 'SOFTWARE\Microsoft\Microsoft SQL Server\' + @InstFolder + '\SQLServerAgent'
+EXECUTE [master].[dbo].[xp_regread] @rootkey = N'HKEY_LOCAL_MACHINE',
+                                    @key = @RegLocMsx,
+                                    @value_name = N'MSXServerName',
+									@value = @MsxServer OUTPUT
+SET @MsxServer = COALESCE(SUBSTRING(@MsxServer,0,CHARINDEX('\',@MsxServer,0)),NULL,'NoMSX')
+
+-- get ag listener name
+SET @query3 = N'IF EXISTS (SELECT database_id from sys.dm_hadr_database_replica_states where database_id = DB_ID(''' + @dbnames + '''))
+	SELECT @listenername = dns_name from sys.availability_group_listeners'
+EXEC sp_executesql @query3, N'@listenername NVARCHAR(128) OUTPUT', @listenername = @agname OUTPUT
+SET @agname = COALESCE(@agname,NULL,'NoAG')
+
+SET @jobcmd1 = N'$jobpath = "' + @DataFolder + '\JOBS"
+$filename = "' + @psfilename + '"
+$content = ''[String[]] $databases = "' + @dbnames + '"
+[String]$source_host = "' + @source_host + '"
+[String]$source_inst = "' + @source_inst + '"
+[String]$agname = "' + @agname + '"
+[String]$cmsserver = "' + @MsxServer + '"
+
+Function Get-Remotemodule {
+    param (
+    [String] $remotename,
+    [String] $modname
+    )
+    $biterr=0
+    Try {
+        $cmsses = New-PSSession -ComputerName $remotename -ErrorAction Stop
+            
+        $remmod = Get-Module -ListAvailable -Name $modname -PSSession $cmsses -ErrorAction Stop
+        if ($remmod) {
+            Import-Module -Name $modname -PSSession $cmsses -DisableNameChecking -Force -ErrorAction SilentlyContinue
+        } else {
+            $biterr=1
+        }
+    } Catch {
+        $biterr=1
+    }
+    if ($biterr -eq 1) {Get-PSSession | Remove-PSSession}
+    Write-Output $biterr
+}
+
+$rubrikmodule = Get-Module -ListAvailable -Name rubrik
+if ($rubrikmodule) { 
+    Import-Module -Name rubrik
+} else {'
+
+IF (@MsxServer = 'NoMSX')
+BEGIN
+	SET @jobcmd1 = @jobcmd1 + '
+	Write-Output "Failed to import rubrik module"        
+	Exit(1)'		
+END
+ELSE
+BEGIN
+SET @jobcmd1 = @jobcmd1 + '
+	$result1 = Get-Remotemodule -modname rubrik -remotename $cmsserver
+	if ($result1 -eq 1) {
+		Write-Output "Failed to import rubrik module"        
+		Exit(1)
+	}'
+END
+
+SET @jobcmd1 = @jobcmd1 + '
+}
+
+$vaultmodule = Get-Module -ListAvailable -Name Zyborg.Vault
+if ($vaultmodule) { 
+    Import-Module -Name Zyborg.Vault
+} else {'
+
+IF (@MsxServer = 'NoMSX')
+BEGIN
+SET @jobcmd1 = @jobcmd1 + '
+	Write-Output "Failed to import Zyborg.Vault module"        
+	Exit(1)'		
+END
+ELSE
+BEGIN
+SET @jobcmd1 = @jobcmd1 + '
+    $result2 = Get-Remotemodule -modname Zyborg.Vault -remotename $cmsserver
+    if ($result2 -eq 1) {
+        Write-Output "Failed to import Zyborg.Vault module"
+        Exit(1)
+    }'
+END
+
+SET @jobcmd1 = @jobcmd1 + '
+}
+
+try {     
+    $vault = Read-VltData -path it_infraserv_database_sql/detnsw -VaultProfile detnswtoken
+    
+    $cred = New-Object System.Management.Automation.PSCredential ($vault["rubrik_user"],$(ConvertTo-SecureString $vault["rubrik_pass"] -AsPlainText -Force))
+
+    #Get rubrik cert
+    $ses = New-PSSession -ComputerName $source_host -ErrorAction Stop
+
+    $cert = Invoke-Command -Session $ses -ScriptBlock {$certloc = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Rubrik Inc.\Backup Service" -Name "Trusted Certificate Path")."Trusted Certificate Path"; `
+        New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $certloc}
+    $thumb = ($cert.Thumbprint).Substring(8,8)
+
+    Switch ($thumb) {
+    "7FB0731D" {#Write-Output "Unanderra"
+                Connect-Rubrik -Server "ps0991brik1000.nsw.education" -Credential $cred -ErrorAction Stop > null}
+    "4546FB71" {#Write-Output "Silverwater"
+                Connect-Rubrik -Server "ps0992brik1000.nsw.education" -Credential $cred -ErrorAction Stop > null}
+    default {Write-Output "Certificate is not recognised"
+		Exit(1)}
+    }
+} catch {
+	Write-Output "Failed to connect to Rubrik server"
+	Exit(1)
+}
+
+Try {
+	$sourcecluster = Get-RubrikHost -Hostname $source_host -ErrorAction Stop
+'
+if (@agname = 'NoAG')
+Begin
+SET @jobcmd1 = @jobcmd1 + '
+	$sourcedatabase = Get-RubrikDatabase -Name $databases -PrimaryClusterID $sourcecluster.primaryClusterId -Instance $source_inst -Hostname $source_host -ErrorAction Stop'
+END
+ELSE
+BEGIN
+SET @jobcmd1 = @jobcmd1 + '
+	$sourcedatabase = Get-RubrikDatabase -Name $databases -PrimaryClusterID $sourcecluster.primaryClusterId -AvailabilityGroupName $agname -ErrorAction Stop'  
+END
+
+SET @jobcmd1 = @jobcmd1 + '
+
+	if (($sourcedatabase | Measure-Object).Count -eq 1) {
+		if (($($sourcedatabase.recoveryModel) -eq "FULL") -or ($($sourcedatabase.isInAvailabilityGroup) -eq $true) ) {
+			Write-Output "New-RubrikLogBackup -id $($sourcedatabase.id)"
+		} else {
+			Write-Output "Database $($sourcedatabase.name) recovery model is $($sourcedatabase.recoveryModel). No Tlog backup performed."
+		}
+	} else {
+		Write-Output "Failed to retrive unique database record from rubrik"
+		Exit(1)
+	}
+} Catch {
+	Write-Output "Failed to generate t-log backup request"
+	Exit(1)
+}
+
+Disconnect-Rubrik -Confirm:$false | Out-Null
+
+Get-PSSession | Remove-PSSession''
+
+$checkfile = Test-Path -Path "$jobpath\$filename"
+
+if ($checkfile) {
+    Remove-Item "$jobpath\$filename"
+}
+
+$content | Out-File -FilePath "$jobpath\$filename"'
+
+--PRINT @jobcmd1
+
+SET @jobcmd2 = N'cd "' + @DataFolder + '\JOBS" && powershell.exe run-odlogbackup.ps1'
+
+SET @query1 = N'SELECT @jobidqry1 = job_id FROM sysjobs WHERE [name] = N''' + @jobname + ''''
+EXEC sp_executesql @query1, N'@jobidqry1 binary(16) OUTPUT', @jobidqry1 = @jobidqry OUTPUT
+
+SET @query2 = N'SELECT @jobstepnoqry2=step_id from sysjobsteps WHERE job_id = 0x' + CONVERT(NVARCHAR(50), @jobidqry,2) + ' and step_name = N''' + @jobstep1 + ''''
+EXEC sp_executesql @query2, N'@jobstepnoqry2 int OUTPUT', @jobstepnoqry2 = @jobstepno OUTPUT
+
+IF (@jobidqry) IS NOT NULL
+BEGIN
+	EXEC dbo.sp_update_jobstep  
+		@job_name = @jobname,  
+		@step_id = @jobstepno,  
+		@command=@jobcmd1
+	END
+ELSE
+BEGIN
+	BEGIN TRANSACTION
+	DECLARE @ReturnCode INT
+	SELECT @ReturnCode = 0
+
+	IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'Database Maintenance' AND category_class=1)
+	BEGIN
+	EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'Database Maintenance'
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+	END
+
+	DECLARE @jobId BINARY(16)
+	EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=@jobname, 
+			@enabled=1, 
+			@notify_level_eventlog=0, 
+			@notify_level_email=0, 
+			@notify_level_netsend=0, 
+			@notify_level_page=0, 
+			@delete_level=0, 
+			@description=N'No description available.', 
+			@category_name=N'Database Maintenance', 
+			@owner_login_name=N'sa', @job_id = @jobId OUTPUT
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+	EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=@jobstep1, 
+			@step_id=1, 
+			@cmdexec_success_code=0, 
+			@on_success_action=3, 
+			@on_success_step_id=0, 
+			@on_fail_action=2, 
+			@on_fail_step_id=0, 
+			@retry_attempts=0, 
+			@retry_interval=0, 
+			@os_run_priority=0, @subsystem=N'PowerShell', 
+			@command=@jobcmd1, 
+			@database_name=N'master', 
+			@flags=0
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+	EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=@jobstep2, 
+		@step_id=2, 
+		@cmdexec_success_code=0, 
+		@on_success_action=1, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'CmdExec', 
+		@command=@jobcmd2, 
+		@flags=0
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+	EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+	EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
+	IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+	COMMIT TRANSACTION
+	GOTO EndSave
+	QuitWithRollback:
+		IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+	EndSave:
+END
