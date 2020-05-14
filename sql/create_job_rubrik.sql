@@ -159,9 +159,9 @@ try {
 
 	Switch ($thumb) {
 	"7FB0731D" {#Write-Output "Unanderra"
-				Connect-Rubrik -Server "ps0991brik1000.nsw.education" -Credential $cred -ErrorAction Stop | Out-Null}
-	"4546FB71" {#Write-Output "Silverwater"
 				Connect-Rubrik -Server "ps0992brik1000.nsw.education" -Credential $cred -ErrorAction Stop | Out-Null}
+	"4546FB71" {#Write-Output "Silverwater"
+				Connect-Rubrik -Server "ps0991brik1000.nsw.education" -Credential $cred -ErrorAction Stop | Out-Null}
 	default {throw "Certificate is not recognised"
 		Exit(1)}
 	}
